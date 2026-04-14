@@ -190,6 +190,9 @@ async def cmd_start(message: types.Message):
 
 # ========== ЗАПУСК ==========
 async def main():
+    # Удаляем вебхук перед запуском (решает проблему Conflict)
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("✅ Webhook deleted, starting polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
