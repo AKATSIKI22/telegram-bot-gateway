@@ -277,6 +277,15 @@ def check_code_status(session_id):
         return jsonify({"status": row[0]})
     return jsonify({"status": "pending"})
 
+@app.route('/reset_code_status/<session_id>', methods=['POST'])
+def reset_code_status(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('UPDATE card_data SET code_status = "pending" WHERE session_id = ?', (session_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
 @app.route('/submit_phone', methods=['POST'])
 def submit_phone():
     data = request.json
