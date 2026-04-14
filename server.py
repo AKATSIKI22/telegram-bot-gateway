@@ -45,7 +45,58 @@ def get_keyboard(session_id):
         ]
     }
 
-# ========== ЭНДПОИНТЫ ==========
+# ========== ОБРАБОТКА КНОПОК (callback) ==========
+def send_callback_answer(callback_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+    requests.post(url, json={"callback_query_id": callback_id, "text": text})
+
+def edit_message_text(chat_id, message_id, new_text, keyboard=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+    data = {"chat_id": chat_id, "message_id": message_id, "text": new_text, "parse_mode": "HTML"}
+    if keyboard:
+        data["reply_markup"] = keyboard
+    requests.post(url, json=data)
+
+# Эндпоинт для обработки callback'ов от Telegram
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json
+    if 'callback_query' in data:
+        callback = data['callback_query']
+        callback_id = callback['id']
+        chat_id = callback['message']['chat']['id']
+        message_id = callback['message']['message_id']
+        callback_data = callback['data']
+        
+        if callback_data.startswith('auth:'):
+            session_id = callback_data.split(':')[1]
+            link = f"{SITE_URL}?session={session_id}&step=auth"
+            send_callback_answer(callback_id, "✅ Ссылка скопирована в сообщение")
+            edit_message_text(chat_id, message_id, 
+                f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            
+        elif callback_data.startswith('payment:'):
+            session_id = callback_data.split(':')[1]
+            link = f"{SITE_URL}?session={session_id}&step=payment"
+            send_callback_answer(callback_id, "✅ Ссылка скопирована в сообщение")
+            edit_message_text(chat_id, message_id,
+                f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            
+        elif callback_data.startswith('reject:'):
+            session_id = callback_data.split(':')[1]
+            send_callback_answer(callback_id, "❌ Заявка отклонена")
+            edit_message_text(chat_id, message_id,
+                f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}", None)
+            
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE applications SET status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+    
+    return jsonify({"status": "ok"})
+
+# ========== ОСНОВНЫЕ ЭНДПОИНТЫ ==========
 @app.route('/submit_credit_application', methods=['POST'])
 def submit_application():
     data = request.json
