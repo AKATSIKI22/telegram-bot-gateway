@@ -72,15 +72,17 @@ def webhook():
         
         if callback_data.startswith('auth:'):
             session_id = callback_data.split(':')[1]
-            link = f"{SITE_URL}/page_56637/?session={session_id}&step=auth"
+            # ПРАВИЛЬНАЯ ССЫЛКА НА АВТОРИЗАЦИЮ
+            link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
-            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}", None)
+            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
-            link = f"{SITE_URL}/page_56637/?session={session_id}&step=payment"
+            # ПРАВИЛЬНАЯ ССЫЛКА НА ОПЛАТУ (без page_56637)
+            link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
-            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}", None)
+            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
