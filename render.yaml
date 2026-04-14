@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: credit-bot-api
+    runtime: python
+    repo: https://github.com/ТВОЙ_АККАУНТ/credit-bot
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: SITE_URL
+        sync: false
+
+  - type: worker
+    name: credit-bot-worker
+    runtime: python
+    repo: https://github.com/ТВОЙ_АККАУНТ/credit-bot
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: SITE_URL
+        sync: false
