@@ -59,7 +59,7 @@ def webhook():
         if callback_data.startswith('approve_credit:'):
             session_id = callback_data.split(':')[1]
             
-            # ОБНОВЛЯЕМ СТАТУС В БАЗЕ
+            # ОБНОВЛЯЕМ СТАТУС
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
             c.execute('UPDATE applications SET status = "approved" WHERE session_id = ?', (session_id,))
