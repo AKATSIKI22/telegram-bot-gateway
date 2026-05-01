@@ -59,7 +59,6 @@ def webhook():
         if callback_data.startswith('approve_credit:'):
             session_id = callback_data.split(':')[1]
             
-            # ОБНОВЛЯЕМ СТАТУС
             conn = sqlite3.connect('applications.db')
             c = conn.cursor()
             c.execute('UPDATE applications SET status = "approved" WHERE session_id = ?', (session_id,))
@@ -128,6 +127,7 @@ def get_application(session_id):
         })
     return jsonify({"error": "not found"}), 404
 
+# ========== ГЛАВНЫЙ ЭНДПОИНТ — ОН ЖЕ РЕШАЕТ ВСЁ ==========
 @app.route('/check_status/<session_id>', methods=['GET'])
 def check_status(session_id):
     conn = sqlite3.connect('applications.db')
@@ -135,9 +135,11 @@ def check_status(session_id):
     c.execute('SELECT status FROM applications WHERE session_id = ?', (session_id,))
     row = c.fetchone()
     conn.close()
+    
     if row:
         return jsonify({"status": row[0]})
-    return jsonify({"status": "not_found"}), 404
+    else:
+        return jsonify({"status": "not_found"}), 404
 
 @app.route('/')
 def home():
